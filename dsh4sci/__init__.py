@@ -1,0 +1,119 @@
+"""dsh4SCI: rules for building and judging atomistic structures.
+
+A library of materials-science domain logic — surfaces, slabs, adsorbates — as
+pure functions over ``pymatgen`` structures. See ``CONTEXT.md`` for vocabulary
+and ``docs/adr/`` for the founding decisions.
+"""
+
+from __future__ import annotations
+
+__version__ = "0.1.0"
+
+# --- public API re-exports: one block per module, added by later tickets ---
+
+# ticket #2 -- structure loading (path in, Structure out)
+from dsh4sci.loading import SUPPORTED_SUFFIXES, load_structure
+
+# ticket #3 -- shared geometry primitives (Vacuum measurement and the Slab/
+# Adsorbate role contract), consumed by tickets #4-#7
+from dsh4sci.geometry import (
+    ADSORBATE_ROLE,
+    ROLE_PROPERTY,
+    SLAB_ROLE,
+    count_z_levels,
+    group_z_levels,
+    set_vacuum,
+    split_roles,
+    vacuum_gap,
+)
+
+# ticket #3 -- slab generation and the Termination fingerprint
+from dsh4sci.slabs import (
+    TerminationFingerprint,
+    generate_slabs,
+    termination_fingerprint,
+)
+
+# ticket #4 -- selective dynamics: mark the bottom of a Slab as fixed
+from dsh4sci.constraints import SlabT, fix_bottom_atoms
+
+# ticket #5 -- adsorption site enumeration: the site vocabulary, the typed site
+# record ticket #6 places an Adsorbate on, and the calibrated "is this a Slab?"
+# predicate that rejects bulk crystals
+from dsh4sci.adsorption import (
+    MIN_VACUUM,
+    MIN_Z_LEVELS,
+    SITE_TYPES,
+    AdsorptionSite,
+    SiteType,
+    find_adsorption_sites,
+    is_slab_like,
+)
+
+# ticket #6 -- adsorbate placement: put a molecule on one of those sites, with the
+# combined Structure, its Slab atom count (the source of truth across file I/O)
+# and the anchor atom's index
+from dsh4sci.adsorption import (
+    DEFAULT_BINDING_HEIGHT,
+    PlacedAdsorbate,
+    place_adsorbate,
+)
+
+# ticket #7 -- the structure self-check: a per-check list of verdicts for a
+# structure that is geometrically valid but physically wrong, and the boolean
+# form of that list
+from dsh4sci.validation import (
+    ANGLE_MAX,
+    ANGLE_MIN,
+    MIN_CELL_VOLUME,
+    MIN_INTERATOMIC_DISTANCE,
+    CheckResult,
+    all_passed,
+    check_adsorbate_anchor_above_surface,
+    check_lattice_angles,
+    check_min_distance,
+    check_structure,
+)
+
+# The declared public surface: exactly the names above, and nothing else. Without
+# this the re-exports are imported-but-unused as far as a linter is concerned, and
+# `from __future__ import annotations` leaks its own `annotations` binding into
+# `from dsh4sci import *`. Adding a public symbol means adding it here too.
+# Sorted, one name per line, no duplicates.
+__all__ = [
+    "ADSORBATE_ROLE",
+    "ANGLE_MAX",
+    "ANGLE_MIN",
+    "AdsorptionSite",
+    "CheckResult",
+    "DEFAULT_BINDING_HEIGHT",
+    "MIN_CELL_VOLUME",
+    "MIN_INTERATOMIC_DISTANCE",
+    "MIN_VACUUM",
+    "MIN_Z_LEVELS",
+    "PlacedAdsorbate",
+    "ROLE_PROPERTY",
+    "SITE_TYPES",
+    "SLAB_ROLE",
+    "SUPPORTED_SUFFIXES",
+    "SiteType",
+    "SlabT",
+    "TerminationFingerprint",
+    "all_passed",
+    "check_adsorbate_anchor_above_surface",
+    "check_lattice_angles",
+    "check_min_distance",
+    "check_structure",
+    "count_z_levels",
+    "find_adsorption_sites",
+    "fix_bottom_atoms",
+    "generate_slabs",
+    "group_z_levels",
+    "is_slab_like",
+    "load_structure",
+    "place_adsorbate",
+    "set_vacuum",
+    "split_roles",
+    "termination_fingerprint",
+    "vacuum_gap",
+]
