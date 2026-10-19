@@ -46,10 +46,9 @@ from pymatgen.core import Structure
 from pymatgen.core.surface import Slab, SlabGenerator
 
 from dsh4sci.errors import InvalidMillerIndexError, InvalidParameterError
-from dsh4sci.geometry import group_z_levels, set_vacuum
+from dsh4sci.geometry import DEFAULT_LAYER_TOL, group_z_levels, set_vacuum
 
 __all__ = [
-    "LAYER_TOL",
     "SHIFT_NDIGITS",
     "TerminationFingerprint",
     "generate_slabs",
@@ -58,9 +57,6 @@ __all__ = [
 
 #: Number of decimal places the in-plane ``shift`` is quantised to (§C.5).
 SHIFT_NDIGITS: Final[int] = 6
-
-#: The z-gap in angstrom that separates two atomic layers (§C.5).
-LAYER_TOL: Final[float] = 0.1
 
 # One valid call, reused by every error message in this module so the snippet a
 # caller is told to paste is always the documented invocation (§H.1 rule 5).
@@ -310,7 +306,7 @@ def termination_fingerprint(slab: Slab) -> TerminationFingerprint:
             f"Example: termination_fingerprint(generate_slabs(bulk, (1, 1, 1))[0])"
         )
 
-    layers = group_z_levels(slab, LAYER_TOL)
+    layers = group_z_levels(slab, DEFAULT_LAYER_TOL)
     if not layers:
         raise ValueError(
             "slab has no sites: it has no terminating layer, so it has no "
