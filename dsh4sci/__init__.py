@@ -10,3 +10,6 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 # --- public API re-exports: one block per module, added by later tickets ---
+
+# ticket #2 -- structure loading (path in, Structure out)
+from dsh4sci.loading import SUPPORTED_SUFFIXES, load_structure
