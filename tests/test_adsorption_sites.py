@@ -7,13 +7,14 @@ restated as literals here so these tests can disagree with the implementation.
 ``z = 16.560011 A``, exact 15 A Vacuum), enumerated with ``height=0.9``,
 ``distance=0.0`` and ``symm_reduce=-1``:
 
-============  ==========  ===============================
-supercell     area / A^2  sites (ontop / bridge / hollow)
-============  ==========  ===============================
-1 x 1          6.6644     1 / 3 / 2
-2 x 2         26.6575     4 / 12 / 8
-3 x 3         59.9794     9 / 27 / 18
-============  ==========  ===============================
+============  ===========  ===============================
+supercell     area / A^2   sites (ontop / bridge / hollow)
+============  ===========  ===============================
+1 x 1           6.6644      1 / 3 / 2
+2 x 2          26.6575      4 / 12 / 8
+3 x 3          59.9794      9 / 27 / 18
+4 x 4         106.6300     16 / 48 / 32
+============  ===========  ===============================
 
 ``distance=0.0`` leaves every site exactly on the top layer, so "at or above the
 top layer" holds with ``>=`` up to float noise (measured ``|dz| <= 3.6e-15``).
@@ -50,11 +51,12 @@ from dsh4sci.slabs import generate_slabs
 
 PT111_TOP_LAYER = 16.560011  # top z-level of the canonical Pt(111) Slab, A
 PT111_PRIMITIVE_AREA = 6.664374  # in-plane area of the primitive cell, A^2
-SUPERCELLS = (1, 2, 3)
+SUPERCELLS = (1, 2, 3, 4)
 PT111_COUNTS: dict[int, dict[str, int]] = {
     1: {"ontop": 1, "bridge": 3, "hollow": 2},
     2: {"ontop": 4, "bridge": 12, "hollow": 8},
     3: {"ontop": 9, "bridge": 27, "hollow": 18},
+    4: {"ontop": 16, "bridge": 48, "hollow": 32},
 }
 
 # Sites are computed in floating point; measured |site z - top layer z| is
@@ -160,7 +162,7 @@ def test_site_counts_scale_with_surface_area(pt_slab: Slab) -> None:
     """Every site type has a constant density, and counts grow exactly as n^2 (§E.3).
 
     One magic number is not evidence of scaling; this asserts the density is
-    constant across 1x1, 2x2 and 3x3 *and* that each count is ``n^2`` times the
+    constant across 1x1 .. 4x4 *and* that each count is ``n^2`` times the
     primitive cell's count.
     """
     areas = {n: in_plane_area(supercelled(pt_slab, n)) for n in SUPERCELLS}
@@ -169,7 +171,7 @@ def test_site_counts_scale_with_surface_area(pt_slab: Slab) -> None:
     }
 
     assert areas[1] == pytest.approx(PT111_PRIMITIVE_AREA, abs=1e-5)
-    assert areas[3] == pytest.approx(9.0 * areas[1], rel=1e-9)
+    assert areas[4] == pytest.approx(16.0 * areas[1], rel=1e-9)
     assert counts[1] == PT111_COUNTS[1]
 
     for site_type in SITE_TYPES:
@@ -354,7 +356,7 @@ def test_a_bulk_crystal_is_rejected_with_the_measured_vacuum(pt_bulk: Structure)
 
 
 def test_the_rejection_message_holds_the_bound_when_both_conditions_fail() -> None:
-    """The longest message is the two-reason one, and it must stay under 210 chars (§H.1).
+    """The longest message is the two-reason one, and it must stay under 210 (§H.1).
 
     An empty cell violates both conditions; it also proves the rejection path never
     divides by zero or indexes an empty stack.
