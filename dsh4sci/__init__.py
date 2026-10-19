@@ -35,3 +35,16 @@ from dsh4sci.slabs import (
 
 # ticket #4 -- selective dynamics: mark the bottom of a Slab as fixed
 from dsh4sci.constraints import fix_bottom_atoms
+
+# ticket #5 -- adsorption site enumeration: the site vocabulary, the typed site
+# record ticket #6 places an Adsorbate on, and the calibrated "is this a Slab?"
+# predicate that rejects bulk crystals
+from dsh4sci.adsorption import (
+    MIN_VACUUM,
+    MIN_Z_LEVELS,
+    SITE_TYPES,
+    AdsorptionSite,
+    SiteType,
+    find_adsorption_sites,
+    is_slab_like,
+)
