@@ -57,3 +57,19 @@ from dsh4sci.adsorption import (
     PlacedAdsorbate,
     place_adsorbate,
 )
+
+# ticket #7 -- the structure self-check: a per-check list of verdicts for a
+# structure that is geometrically valid but physically wrong, and the boolean
+# form of that list
+from dsh4sci.validation import (
+    ANGLE_MAX,
+    ANGLE_MIN,
+    MIN_CELL_VOLUME,
+    MIN_INTERATOMIC_DISTANCE,
+    CheckResult,
+    all_passed,
+    check_adsorbate_anchor_above_surface,
+    check_lattice_angles,
+    check_min_distance,
+    check_structure,
+)
