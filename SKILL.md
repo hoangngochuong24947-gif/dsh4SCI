@@ -103,7 +103,7 @@ bulk = load_structure("tests/fixtures/Pt.poscar")   # any POSCAR / CIF path
 ```signatures
 generate_slabs(bulk: Structure, miller_index: Sequence[int], min_slab_size: float = 10.0, vacuum: float = 15.0) -> list[Slab]
 termination_fingerprint(slab: Slab) -> TerminationFingerprint
-fix_bottom_atoms(slab: _SlabT, fraction: float) -> _SlabT
+fix_bottom_atoms(slab: SlabT, fraction: float) -> SlabT
 ```
 
 `generate_slabs` returns **one Slab per Termination** — all of them, not a chosen
@@ -116,12 +116,13 @@ The fingerprint is a frozen record of the top and bottom layer compositions plus
 the in-plane offset, quantised to 6 decimals. `str()` gives a compact form and
 `sha()` a 16-hex digest; both are stable across processes.
 
-`_SlabT` is a private type variable bound to `Structure`: give `fix_bottom_atoms`
-a Slab and you get a Slab back. It fixes the bottom `floor(n_atoms * fraction)`
-atoms by writing pymatgen's `selective_dynamics` site property — the only way
-`Poscar` will emit the flag block — and it orders atoms by `(z, x, y, index)` so
-the same physical slab always fixes the same atoms, whatever order the sites
-happen to arrive in. `fraction=0` fixes nothing; the Vacuum is untouched.
+`SlabT` is a public type variable bound to `Structure`, exported from the package
+root: give `fix_bottom_atoms` a Slab and you get a Slab back. It fixes the bottom
+`floor(n_atoms * fraction)` atoms by writing pymatgen's `selective_dynamics` site
+property — the only way `Poscar` will emit the flag block — and it orders atoms by
+`(z, x, y, index)` so the same physical slab always fixes the same atoms, whatever
+order the sites happen to arrive in. `fraction=0` fixes nothing; the Vacuum is
+untouched.
 
 ```python
 from dsh4sci import fix_bottom_atoms, generate_slabs, termination_fingerprint

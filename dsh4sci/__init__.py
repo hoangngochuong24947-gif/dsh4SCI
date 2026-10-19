@@ -35,7 +35,7 @@ from dsh4sci.slabs import (
 )
 
 # ticket #4 -- selective dynamics: mark the bottom of a Slab as fixed
-from dsh4sci.constraints import fix_bottom_atoms
+from dsh4sci.constraints import SlabT, fix_bottom_atoms
 
 # ticket #5 -- adsorption site enumeration: the site vocabulary, the typed site
 # record ticket #6 places an Adsorbate on, and the calibrated "is this a Slab?"
@@ -97,6 +97,7 @@ __all__ = [
     "SLAB_ROLE",
     "SUPPORTED_SUFFIXES",
     "SiteType",
+    "SlabT",
     "TerminationFingerprint",
     "all_passed",
     "check_adsorbate_anchor_above_surface",

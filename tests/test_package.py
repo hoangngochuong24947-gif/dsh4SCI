@@ -159,6 +159,7 @@ PUBLIC_SURFACE = frozenset(
         "generate_slabs",
         "termination_fingerprint",
         # ticket #4 -- selective dynamics
+        "SlabT",
         "fix_bottom_atoms",
         # ticket #5 -- adsorption site enumeration
         "MIN_VACUUM",
