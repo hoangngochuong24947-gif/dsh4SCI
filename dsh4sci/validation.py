@@ -32,12 +32,19 @@ The three rules, each measured rather than assumed:
 
 Thresholds are constants of the physics, not tunables, but a caller may pass a
 different one where a system justifies it (:data:`MIN_INTERATOMIC_DISTANCE`).
+
+:func:`check_structure` runs the three and returns the list; :func:`all_passed`
+reduces it to the boolean. The anchor check is never silently skipped: a structure
+carrying ``role``-tagged Adsorbate atoms must name its binding atom, because
+omitting that check and reporting "everything passed" is the false negative this
+module exists to prevent.
 """
 
 from __future__ import annotations
 
 import math
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Final
 
@@ -53,9 +60,11 @@ __all__ = [
     "MIN_CELL_VOLUME",
     "MIN_INTERATOMIC_DISTANCE",
     "CheckResult",
+    "all_passed",
     "check_adsorbate_anchor_above_surface",
     "check_lattice_angles",
     "check_min_distance",
+    "check_structure",
 ]
 
 #: Closest allowed interatomic distance; ``<=`` this value fails (§G.1).
@@ -83,6 +92,11 @@ _ANCHOR_EXAMPLE = (
     "check_adsorbate_anchor_above_surface(placed.structure, placed.anchor_index)"
 )
 
+_CHECK_EXAMPLE = "check_structure(placed.structure, anchor_index=placed.anchor_index)"
+
+# The site property carrying the Slab/Adsorbate split; owned by dsh4sci.geometry.
+_ROLE_PROPERTY: Final[str] = "role"
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -103,6 +117,11 @@ class CheckResult:
     name: str
     passed: bool
     detail: str
+
+    def __str__(self) -> str:
+        """One-line report, e.g. ``[PASS] lattice_angles: volume=160.3449 A^3``."""
+        verdict = "PASS" if self.passed else "FAIL"
+        return f"[{verdict}] {self.name}: {self.detail}"
 
 
 def check_min_distance(
@@ -130,10 +149,25 @@ def check_min_distance(
         alone does not tell a chemist which atoms collided. A structure with fewer
         than two sites has nothing to compare and passes.
 
+    Raises:
+        InvalidParameterError: ``threshold`` is not a finite number greater than
+            zero (a zero or negative threshold would accept every structure).
+
     Example:
         ``check_min_distance(placed.structure)`` reports the C-O bond at 1.1503 A.
     """
     name = "minimum_interatomic_distance"
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not math.isfinite(threshold)
+        or threshold <= 0
+    ):
+        raise InvalidParameterError(
+            f"threshold={threshold!r} is invalid: must be a finite number > 0. "
+            f"Valid: a distance in Angstrom, e.g. 0.5. "
+            f"Example: check_min_distance(placed.structure)"
+        )
     n_sites = len(structure)
     if n_sites < 2:
         return CheckResult(
@@ -201,10 +235,26 @@ def check_lattice_angles(
         measured angles (rounded to 3 decimals) and the volume to 4 decimals, so a
         caller can see how far the cell is from valid.
 
+    Raises:
+        InvalidParameterError: The thresholds are not ordered angles inside
+            ``(0, 180)``, or ``min_volume`` is not a positive finite number.
+
     Example:
         ``check_lattice_angles(slab)`` reports ``volume=160.3449 A^3`` for Pt(111).
     """
     name = "lattice_angles"
+    if not (0 < min_angle < max_angle < 180):
+        raise InvalidParameterError(
+            f"min_angle={min_angle!r}/max_angle={max_angle!r} is invalid: need "
+            f"0 < min < max < 180 deg. Valid: 5 and 175. "
+            f"Example: check_lattice_angles(slab)"
+        )
+    if not (math.isfinite(min_volume) and min_volume > 0):
+        raise InvalidParameterError(
+            f"min_volume={min_volume!r} is invalid: must be a finite number > 0. "
+            f"Valid: a cell volume in A^3, e.g. 1e-6. "
+            f"Example: check_lattice_angles(slab)"
+        )
     # A degenerate cell makes pymatgen's own angle/volume properties divide by
     # zero; the check must reject that input, not warn about it.
     with warnings.catch_warnings():
@@ -314,3 +364,79 @@ def check_adsorbate_anchor_above_surface(
         True,
         f"anchor at z={z_anchor:.4f} A >= slab top z={z_top:.4f} A",
     )
+
+
+def check_structure(
+    structure: Structure, *, anchor_index: int | None = None
+) -> list[CheckResult]:
+    """Run the self-check and return one :class:`CheckResult` per check.
+
+    Always runs :func:`check_min_distance` and :func:`check_lattice_angles`, and
+    runs :func:`check_adsorbate_anchor_above_surface` when ``anchor_index`` names
+    the Adsorbate's binding atom. The results are ordered as the conventions show
+    them -- distance, anchor, lattice -- and the list is what a caller reports.
+
+    **The anchor check is never silently skipped.** A structure that carries
+    ``role``-tagged Adsorbate atoms but no ``anchor_index`` is rejected: reporting
+    "everything passed" without looking at the Adsorbate is precisely the false
+    negative this module exists to prevent. Only the anchor atom can answer the
+    question, so the caller must say which atom binds (``PlacedAdsorbate``
+    returns it as :attr:`~dsh4sci.adsorption.PlacedAdsorbate.anchor_index`).
+
+    Use :func:`all_passed` when the boolean is all the caller wants.
+
+    Args:
+        structure: The structure to judge. A structure with ``role``-tagged
+            Adsorbate atoms must come from :func:`~dsh4sci.adsorption.
+            place_adsorbate` (or be tagged equivalently).
+        anchor_index: Index of the Adsorbate's anchor atom, or ``None`` for a
+            structure without an Adsorbate.
+
+    Returns:
+        The results, in report order. Two entries without an Adsorbate, three with
+        one.
+
+    Raises:
+        InvalidParameterError: The structure has Adsorbate-tagged sites but no
+            ``anchor_index`` was given.
+        ValueError: ``anchor_index`` was given for a structure without the ``role``
+            site property, propagated from :func:`split_roles`.
+
+    Example:
+        ``check_structure(placed.structure, anchor_index=placed.anchor_index)``
+    """
+    has_adsorbate = any(
+        str(role) == ADSORBATE_ROLE
+        for role in structure.site_properties.get(_ROLE_PROPERTY, ())
+    )
+    if anchor_index is None and has_adsorbate:
+        raise InvalidParameterError(
+            f"anchor_index=None is invalid: Adsorbate-tagged sites present, so the "
+            f"anchor check cannot run. Valid: the binding atom's index. "
+            f"Example: {_CHECK_EXAMPLE}"
+        )
+
+    results = [check_min_distance(structure)]
+    if anchor_index is not None:
+        results.append(
+            check_adsorbate_anchor_above_surface(structure, anchor_index=anchor_index)
+        )
+    results.append(check_lattice_angles(structure))
+    return results
+
+
+def all_passed(results: Iterable[CheckResult]) -> bool:
+    """Whether every check passed -- the boolean form of a result list.
+
+    ``True`` for an empty list: every check that ran passed, and none ran.
+
+    Args:
+        results: The results from :func:`check_structure`, or any subset of them.
+
+    Returns:
+        ``True`` iff no result failed.
+
+    Example:
+        ``all_passed(check_structure(slab))`` is ``True`` for a sound Slab.
+    """
+    return all(result.passed for result in results)

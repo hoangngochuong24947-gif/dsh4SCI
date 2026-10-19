@@ -23,21 +23,24 @@ from __future__ import annotations
 
 import math
 import warnings
+from dataclasses import FrozenInstanceError
 
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
-from pymatgen.core.surface import Slab, SlabGenerator
+from pymatgen.core.surface import Slab
 
-from dsh4sci.adsorption import find_adsorption_sites, place_adsorbate
+from dsh4sci.adsorption import PlacedAdsorbate, find_adsorption_sites, place_adsorbate
+from dsh4sci.errors import InvalidParameterError
 from dsh4sci.geometry import ADSORBATE_ROLE, SLAB_ROLE, split_roles
 from dsh4sci.slabs import generate_slabs
-from dsh4sci.errors import InvalidParameterError
 from dsh4sci.validation import (
     CheckResult,
+    all_passed,
     check_adsorbate_anchor_above_surface,
     check_lattice_angles,
     check_min_distance,
+    check_structure,
 )
 
 # --- pinned numbers, CONVENTIONS.md §G / §J --------------------------------
@@ -96,6 +99,19 @@ def cautionary_lattice(*parameters: float) -> Lattice:
 def pt_slab(pt_bulk: Structure) -> Slab:
     """The canonical Pt(111) Slab: ``Pt5``, 5 z-levels, exact 15 A Vacuum."""
     return generate_slabs(pt_bulk, (1, 1, 1), min_slab_size=10.0, vacuum=15.0)[0]
+
+
+@pytest.fixture
+def placed_co(pt_slab: Slab) -> PlacedAdsorbate:
+    """CO bound ontop of the canonical Pt(111) Slab, carbon down.
+
+    The correct structure the self-check must accept (§G.5), built through the real
+    placement path so these tests are end-to-end rather than hand-made fixtures.
+    """
+    ontop = next(
+        site for site in find_adsorption_sites(pt_slab) if site.site_type == "ontop"
+    )
+    return place_adsorbate(pt_slab, ontop, molecule="CO", anchor="C")
 
 
 # --- minimum interatomic distance over periodic images (§G.1) --------------
@@ -220,8 +236,10 @@ def test_a_structure_with_a_single_site_has_no_pair_and_passes() -> None:
             id="hexagonal-90-90-120",
         ),
         pytest.param(
+            # sin(60) = sin(120), so the 60 degree cell holds the same volume: the
+            # Pt(111) Slab's own cell is (90, 90, 60) and must pass (§G.3).
             Lattice.from_parameters(3, 3, 5, 90, 90, 60),
-            38.9711,
+            HEX_VOLUME,
             id="slab-like-90-90-60",
         ),
     ],
@@ -253,7 +271,7 @@ def test_the_canonical_pt111_slab_cell_passes(pt_slab: Slab) -> None:
     result = check_lattice_angles(pt_slab)
 
     assert result.passed is True
-    assert "volume=160.3449" in result.detail
+    assert f"volume={SLAB_VOLUME:.4f}" in result.detail
     assert "60.0" in result.detail
 
 
@@ -397,17 +415,14 @@ def test_an_anchor_below_the_slab_top_layer_fails_and_states_the_depth(
 
 
 def test_a_correct_co_on_pt111_has_its_anchor_above_the_surface(
-    pt_slab: Slab,
+    placed_co: PlacedAdsorbate,
 ) -> None:
     """CO placed by ``place_adsorbate`` binds 1.85 A above the top layer: pass.
 
     The anchor is the carbon, at z = 16.560011 + 1.85 = 18.410011 A, above the
     slab top layer read from the structure rather than hard-coded (§J.6).
     """
-    ontop = next(
-        site for site in find_adsorption_sites(pt_slab) if site.site_type == "ontop"
-    )
-    placed = place_adsorbate(pt_slab, ontop, molecule="CO", anchor="C")
+    placed = placed_co
 
     result = check_adsorbate_anchor_above_surface(
         placed.structure, anchor_index=placed.anchor_index
@@ -421,7 +436,7 @@ def test_a_correct_co_on_pt111_has_its_anchor_above_the_surface(
 
 
 def test_co_pushed_inside_the_pt111_slab_is_caught_and_the_depth_is_reported(
-    pt_slab: Slab,
+    placed_co: PlacedAdsorbate,
 ) -> None:
     """The motivating failure: a buried Adsorbate in an otherwise valid structure.
 
@@ -431,10 +446,7 @@ def test_co_pushed_inside_the_pt111_slab_is_caught_and_the_depth_is_reported(
     the stack (above the bottom layer), which is exactly why a z threshold could
     never classify it as an Adsorbate.
     """
-    ontop = next(
-        site for site in find_adsorption_sites(pt_slab) if site.site_type == "ontop"
-    )
-    placed = place_adsorbate(pt_slab, ontop, molecule="CO", anchor="C")
+    placed = placed_co
     structure = placed.structure.copy()
     bury_adsorbate(structure, placed.anchor_index, BURIED_ANCHOR_Z)
 
@@ -452,8 +464,8 @@ def test_co_pushed_inside_the_pt111_slab_is_caught_and_the_depth_is_reported(
     # Buried *inside* the Slab, not merely below the whole cell.
     assert bottom < anchor_z < top
     assert anchor_z == pytest.approx(BURIED_ANCHOR_Z, abs=1e-9)
-    assert f"{top - anchor_z:.4f} A BELOW" in result.detail
-    assert f"{top - anchor_z:.4f}" == "5.7330"
+    assert top - anchor_z == pytest.approx(BURIED_ANCHOR_DEPTH, abs=1e-4)
+    assert f"{BURIED_ANCHOR_DEPTH:.4f} A BELOW" in result.detail
     # The rest of the self-check cannot see this structure as broken.
     assert check_min_distance(structure).passed is True
     assert check_lattice_angles(structure).passed is True
@@ -518,3 +530,194 @@ def test_an_anchor_index_outside_the_structure_is_rejected() -> None:
         message = str(excinfo.value)
         assert f"anchor_index={bad_index}" in message
         assert len(message) <= 210
+
+
+# --- the self-check as a per-check list (§G) -------------------------------
+#
+# ``check_structure`` returns the list; ``all_passed`` answers the boolean
+# question. A bare boolean would leave the caller re-measuring to report what is
+# wrong, which is the whole reason these checks exist.
+
+
+def test_check_structure_returns_a_list_of_named_results_not_a_boolean() -> None:
+    """A plain bulk cell yields one result per applicable check, each typed.
+
+    The names are the public contract -- callers select failures by name -- so they
+    are asserted exactly, in the order the self-check reports them.
+    """
+    structure = Structure(Lattice.cubic(A_PT), ["Pt"], [[0, 0, 0]])
+
+    results = check_structure(structure)
+
+    assert isinstance(results, list)
+    assert all(isinstance(result, CheckResult) for result in results)
+    assert [result.name for result in results] == [
+        "minimum_interatomic_distance",
+        "lattice_angles",
+    ]
+    assert all(result.passed for result in results)
+    assert all_passed(results) is True
+
+
+def test_a_correct_co_on_pt111_passes_the_whole_self_check(
+    placed_co: PlacedAdsorbate,
+) -> None:
+    """The end-to-end assertion: a real CO/Pt(111) passes all three checks (§G.5).
+
+    The structure is placed by ``place_adsorbate``, not hand-made, and the closest
+    pair is the intramolecular C-O bond at 1.15034 A -- which is why the distance
+    threshold is 0.5 A and must not be raised.
+    """
+    results = check_structure(
+        placed_co.structure, anchor_index=placed_co.anchor_index
+    )
+
+    assert [result.name for result in results] == [
+        "minimum_interatomic_distance",
+        "adsorbate_anchor_above_surface",
+        "lattice_angles",
+    ]
+    assert all(result.passed for result in results), [
+        str(result) for result in results if not result.passed
+    ]
+    assert all_passed(results) is True
+    # ... and the numbers in the report are the measured ones, not restatements.
+    assert "5 (O)-6 (C)" in results[0].detail
+    assert f"at {CO_CLOSEST_PAIR:.4f} A" in results[0].detail
+    assert "18.4100" in results[1].detail
+    assert f"{slab_top_layer_z(placed_co.structure):.4f}" in results[1].detail
+    assert f"volume={SLAB_VOLUME:.4f}" in results[2].detail
+
+
+def test_a_buried_adsorbate_fails_only_the_anchor_check(
+    placed_co: PlacedAdsorbate,
+) -> None:
+    """One distinct reason, in a structure the other checks accept.
+
+    The cell is untouched and no atoms collide, so only the anchor check can see
+    the buried Adsorbate: exactly one failure, named, with the depth stated.
+    """
+    structure = placed_co.structure.copy()
+    bury_adsorbate(structure, placed_co.anchor_index, BURIED_ANCHOR_Z)
+
+    results = check_structure(structure, anchor_index=placed_co.anchor_index)
+
+    failed = [result for result in results if not result.passed]
+    assert [result.name for result in failed] == ["adsorbate_anchor_above_surface"]
+    assert f"{BURIED_ANCHOR_DEPTH:.4f} A BELOW" in failed[0].detail
+    assert all_passed(results) is False
+
+
+def test_a_tagged_adsorbate_without_an_anchor_index_is_rejected(
+    placed_co: PlacedAdsorbate,
+) -> None:
+    """Silently skipping the anchor check would hide the failure it exists for.
+
+    A structure carrying ``role``-tagged Adsorbate atoms must say which atom binds;
+    the alternative -- omitting that check and reporting "everything passed" -- is
+    the false negative this ticket is about.
+    """
+    with pytest.raises(InvalidParameterError) as excinfo:
+        check_structure(placed_co.structure)
+
+    message = str(excinfo.value)
+    assert "anchor_index" in message
+    assert "Adsorbate-tagged" in message
+    assert "cannot run" in message
+    assert len(message) <= 210
+
+
+def test_all_passed_is_true_only_when_every_result_passed() -> None:
+    """The convenience for callers that only want the boolean.
+
+    ``all_passed([])`` is vacuously true, which is the honest reading of "every
+    check that ran passed".
+    """
+    assert all_passed([]) is True
+    passed = CheckResult("a", True, "")
+    failed = CheckResult("b", False, "")
+    assert all_passed([passed, passed]) is True
+    assert all_passed([passed, failed]) is False
+
+
+def test_a_check_result_is_frozen_evidence() -> None:
+    """A verdict cannot be edited after the fact -- it is evidence, not scratch.
+
+    It also renders as the one-line report the conventions show, which is what a
+    caller prints instead of a bare boolean.
+    """
+    result = CheckResult("lattice_angles", False, "invalid cell")
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(result, "passed", True)
+
+    assert str(result) == "[FAIL] lattice_angles: invalid cell"
+    assert str(CheckResult("lattice_angles", True, "ok")) == "[PASS] lattice_angles: ok"
+
+
+def test_the_public_api_is_importable_from_the_package_root() -> None:
+    """Whatever the module exposes is re-exported at ``dsh4sci``'s root.
+
+    The package root is the library's public surface; a validation API reachable
+    only through the submodule would not be discoverable from SKILL.md.
+    """
+    import dsh4sci
+
+    for name in (
+        "CheckResult",
+        "all_passed",
+        "check_adsorbate_anchor_above_surface",
+        "check_lattice_angles",
+        "check_min_distance",
+        "check_structure",
+    ):
+        assert hasattr(dsh4sci, name), name
+    assert dsh4sci.all_passed is all_passed
+    assert dsh4sci.CheckResult is CheckResult
+
+
+# --- parameters that would silently disable a check ------------------------
+
+
+@pytest.mark.parametrize("threshold", [0.0, -0.5, math.nan, math.inf, True, "0.5"])
+def test_an_unusable_distance_threshold_is_rejected(threshold: object) -> None:
+    """A zero or negative threshold would accept every structure: refuse it.
+
+    ``True`` is rejected even though it is an ``int`` in Python, because a boolean
+    threshold is a mix-up, not a distance.
+    """
+    structure = Structure(Lattice.cubic(2.0), ["Pt", "C"], [[0, 0, 0], [0, 0, 0.3]])
+
+    with pytest.raises(InvalidParameterError) as excinfo:
+        check_min_distance(structure, threshold=threshold)
+
+    message = str(excinfo.value)
+    assert "threshold=" in message
+    assert len(message) <= 210
+
+
+@pytest.mark.parametrize(
+    ("min_angle", "max_angle", "min_volume"),
+    [
+        pytest.param(175.0, 5.0, 1e-6, id="angles-inverted"),
+        pytest.param(0.0, 175.0, 1e-6, id="min-angle-zero"),
+        pytest.param(5.0, 180.0, 1e-6, id="max-angle-180"),
+        pytest.param(5.0, 175.0, 0.0, id="volume-zero"),
+        pytest.param(5.0, 175.0, math.inf, id="volume-infinite"),
+    ],
+)
+def test_unusable_lattice_thresholds_are_rejected(
+    min_angle: float, max_angle: float, min_volume: float
+) -> None:
+    """Thresholds that cannot define a valid range are a caller error, not a verdict."""
+    structure = Structure(Lattice.cubic(A_PT), ["Pt"], [[0, 0, 0]])
+
+    with pytest.raises(InvalidParameterError) as excinfo:
+        check_lattice_angles(
+            structure,
+            min_angle=min_angle,
+            max_angle=max_angle,
+            min_volume=min_volume,
+        )
+
+    assert len(str(excinfo.value)) <= 210
