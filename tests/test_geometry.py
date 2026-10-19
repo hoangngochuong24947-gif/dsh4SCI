@@ -455,3 +455,32 @@ def test_split_roles_rejects_an_unknown_role_value(ortho_slab: Slab) -> None:
     assert "'slab'" in message or "slab" in message
     assert "Example: " in message
     assert "\n" not in message
+
+
+def test_set_vacuum_rejects_a_vacuum_thinner_than_the_interlayer_gap(
+    ortho_slab: Slab,
+) -> None:
+    """A Vacuum below the slab's own layer spacing cannot be *measured* as the gap.
+
+    The Vacuum is defined as the largest periodic gap. Ask for less than the
+    interlayer spacing and that definition saturates at the spacing itself, so a
+    silent implementation would return 2.265 A while claiming to have honoured the
+    request. Refuse instead.
+    """
+    with pytest.raises(InvalidParameterError) as excinfo:
+        set_vacuum(ortho_slab, 1.0)
+
+    message = str(excinfo.value)
+    assert "vacuum=1.0" in message
+    assert "interlayer gap" in message
+    assert "2.265" in message
+    assert "\n" not in message
+
+
+def test_set_vacuum_accepts_a_vacuum_at_least_the_interlayer_gap(
+    ortho_slab: Slab,
+) -> None:
+    """The boundary is inclusive: exactly the interlayer spacing is measurable."""
+    rescaled = set_vacuum(ortho_slab, 3.0)
+
+    assert vacuum_gap(rescaled) == pytest.approx(3.0, abs=1e-12)

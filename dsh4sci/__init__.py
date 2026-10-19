@@ -25,3 +25,10 @@ from dsh4sci.geometry import (
     split_roles,
     vacuum_gap,
 )
+
+# ticket #3 -- slab generation and the Termination fingerprint
+from dsh4sci.slabs import (
+    TerminationFingerprint,
+    generate_slabs,
+    termination_fingerprint,
+)

@@ -59,6 +59,10 @@ DEFAULT_LAYER_TOL: Final[float] = 0.1
 
 _SET_VACUUM_EXAMPLE = "set_vacuum(raw.get_orthogonal_c_slab(), 15.0)"
 
+# Tolerance for comparing a requested Vacuum against the slab's internal
+# interlayer gap: the two are floats derived by different arithmetic paths.
+_VACUUM_SLACK: Final[float] = 1e-9
+
 # The site property carrying the Slab/Adsorbate split. Its name is part of the
 # public contract: callers set it themselves to feed split_roles (§G.4).
 _ROLE_PROPERTY: Final[str] = "role"
@@ -143,7 +147,7 @@ def set_vacuum(slab: Structure, vacuum: float) -> Slab:
     Example:
         ``set_vacuum(raw.get_orthogonal_c_slab(), 15.0)``
     """
-    if not isinstance(vacuum, (int, float)) or isinstance(vacuum, bool):
+    if isinstance(vacuum, bool) or not isinstance(vacuum, (int, float, np.floating)):
         raise InvalidParameterError(
             f"vacuum={vacuum!r} is invalid: expected a number in angstrom. "
             f"Valid: a positive float, typically >= 5.0. Example: {_SET_VACUUM_EXAMPLE}"
@@ -181,6 +185,20 @@ def set_vacuum(slab: Structure, vacuum: float) -> Slab:
     bottom = float(z_sorted[(gap_index + 1) % len(z_sorted)])
     cart[:, 2] = bottom + ((z - bottom) % c)
 
+    # The Vacuum can only be *measured* as the largest periodic gap if it is at
+    # least as large as the slab's own largest internal gap. Below that, the
+    # periodic gap saturates at the internal spacing and the function would return
+    # a plausible-looking wrong number. Refuse instead.
+    if thickness > 0:
+        internal = _largest_internal_gap(z_sorted, c, gap_index)
+        if float(vacuum) < internal - _VACUUM_SLACK:
+            raise InvalidParameterError(
+                f"vacuum={vacuum!r} is invalid: smaller than the slab's own "
+                f"{internal:.3f} A interlayer gap, so it could not be measured as "
+                f"the largest periodic gap. Valid: a thickness above {internal:.3f} "
+                f"and typically >= 5.0. Example: {_SET_VACUUM_EXAMPLE}"
+            )
+
     new_c = thickness + float(vacuum)
 
     # Scale c only: the in-plane lattice and the stack's internal geometry are
@@ -205,6 +223,18 @@ def set_vacuum(slab: Structure, vacuum: float) -> Slab:
         reorient_lattice=slab.reorient_lattice,
         site_properties=slab.site_properties,
     )
+
+
+def _largest_internal_gap(z_sorted: np.ndarray, c: float, gap_index: int) -> float:
+    """Largest gap *inside* the atomic stack, i.e. excluding the Vacuum itself.
+
+    ``z_sorted`` holds the sorted Cartesians of one structure; ``gap_index`` is the
+    index of the widest of the periodic gaps (the Vacuum, or ``len - 1`` for the
+    wrap-around). Every other gap lies between two consecutive layers of the stack.
+    """
+    gaps = np.diff(np.concatenate([z_sorted, [z_sorted[0] + c]]))
+    internal = [g for i, g in enumerate(gaps) if i != gap_index]
+    return float(max(internal)) if internal else 0.0
 
 
 def group_z_levels(
