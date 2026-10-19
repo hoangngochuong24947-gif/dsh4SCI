@@ -412,7 +412,7 @@ def check_structure(
     if anchor_index is None and has_adsorbate:
         raise InvalidParameterError(
             f"anchor_index=None is invalid: Adsorbate-tagged sites present, so the "
-            f"anchor check cannot run. Valid: the binding atom's index. "
+            f"anchor check cannot run. Valid: an int in [0, {len(structure) - 1}]. "
             f"Example: {_CHECK_EXAMPLE}"
         )
 

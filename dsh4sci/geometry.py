@@ -193,10 +193,10 @@ def set_vacuum(slab: Structure, vacuum: float) -> Slab:
         internal = _largest_internal_gap(z_sorted, c, gap_index)
         if float(vacuum) < internal - _VACUUM_SLACK:
             raise InvalidParameterError(
-                f"vacuum={vacuum!r} is invalid: smaller than the slab's own "
-                f"{internal:.3f} A interlayer gap, so it could not be measured as "
-                f"the largest periodic gap. Valid: a thickness above {internal:.3f} "
-                f"and typically >= 5.0. Example: {_SET_VACUUM_EXAMPLE}"
+                f"vacuum={vacuum!r} is invalid: below the slab's own "
+                f"{internal:.3f} A interlayer gap, so the periodic gap would "
+                f"saturate. Valid: > {internal:.3f}, typically >= 5.0. "
+                f"Example: {_SET_VACUUM_EXAMPLE}"
             )
 
     new_c = thickness + float(vacuum)
