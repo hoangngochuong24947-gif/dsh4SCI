@@ -52,7 +52,12 @@ import numpy as np
 from pymatgen.core import Structure
 
 from dsh4sci.errors import InvalidParameterError
-from dsh4sci.geometry import ADSORBATE_ROLE, SLAB_ROLE, split_roles
+from dsh4sci.geometry import (
+    ADSORBATE_ROLE,
+    ROLE_PROPERTY,
+    SLAB_ROLE,
+    split_roles,
+)
 
 __all__ = [
     "ANGLE_MAX",
@@ -93,10 +98,6 @@ _ANCHOR_EXAMPLE = (
 )
 
 _CHECK_EXAMPLE = "check_structure(placed.structure, anchor_index=placed.anchor_index)"
-
-# The site property carrying the Slab/Adsorbate split; owned by dsh4sci.geometry.
-_ROLE_PROPERTY: Final[str] = "role"
-
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -407,7 +408,7 @@ def check_structure(
     """
     has_adsorbate = any(
         str(role) == ADSORBATE_ROLE
-        for role in structure.site_properties.get(_ROLE_PROPERTY, ())
+        for role in structure.site_properties.get(ROLE_PROPERTY, ())
     )
     if anchor_index is None and has_adsorbate:
         raise InvalidParameterError(

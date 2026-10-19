@@ -18,6 +18,7 @@ from dsh4sci.loading import SUPPORTED_SUFFIXES, load_structure
 # Adsorbate role contract), consumed by tickets #4-#7
 from dsh4sci.geometry import (
     ADSORBATE_ROLE,
+    ROLE_PROPERTY,
     SLAB_ROLE,
     count_z_levels,
     group_z_levels,
@@ -91,6 +92,7 @@ __all__ = [
     "MIN_VACUUM",
     "MIN_Z_LEVELS",
     "PlacedAdsorbate",
+    "ROLE_PROPERTY",
     "SITE_TYPES",
     "SLAB_ROLE",
     "SUPPORTED_SUFFIXES",

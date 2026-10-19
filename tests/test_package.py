@@ -147,6 +147,7 @@ PUBLIC_SURFACE = frozenset(
         "load_structure",
         # ticket #3 -- the shared geometry primitives
         "ADSORBATE_ROLE",
+        "ROLE_PROPERTY",
         "SLAB_ROLE",
         "count_z_levels",
         "group_z_levels",
