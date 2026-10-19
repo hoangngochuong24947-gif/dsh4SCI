@@ -48,3 +48,12 @@ from dsh4sci.adsorption import (
     find_adsorption_sites,
     is_slab_like,
 )
+
+# ticket #6 -- adsorbate placement: put a molecule on one of those sites, with the
+# combined Structure, its Slab atom count (the source of truth across file I/O)
+# and the anchor atom's index
+from dsh4sci.adsorption import (
+    DEFAULT_BINDING_HEIGHT,
+    PlacedAdsorbate,
+    place_adsorbate,
+)
