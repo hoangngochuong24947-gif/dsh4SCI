@@ -560,6 +560,12 @@ def _as_slab(structure: Structure) -> Slab:
     a plain ``Structure``. The orthogonalisation reads only the lattice and the
     sites, so the ``Slab``-only metadata (Miller index, shift, oriented unit cell)
     is filled with neutral placeholders and is not observable in the result.
+
+    ``scale_factor`` is contracted as a 3x3 matrix (the oriented unit cell -> the
+    surface cell), so its neutral placeholder is the identity matrix rather than
+    the scalar ``1.0``: a float there violates the ``Slab`` type contract, and any
+    later caller that reads the field would get a scalar where a matrix is
+    promised.
     """
     if isinstance(structure, Slab):
         return structure
@@ -570,6 +576,6 @@ def _as_slab(structure: Structure) -> Slab:
         miller_index=(0, 0, 1),
         oriented_unit_cell=structure,
         shift=0.0,
-        scale_factor=1.0,
+        scale_factor=np.eye(3),
         site_properties=structure.site_properties,
     )
