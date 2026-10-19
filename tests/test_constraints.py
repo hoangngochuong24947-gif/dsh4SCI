@@ -11,6 +11,8 @@ structure and the POSCAR it writes -- never a private helper.
 
 from __future__ import annotations
 
+from typing import TypeVar
+
 import numpy as np
 import pytest
 from pymatgen.core import Structure
@@ -252,3 +254,23 @@ def test_is_exported_from_the_package_root() -> None:
     from dsh4sci import fix_bottom_atoms as exported
 
     assert exported is fix_bottom_atoms
+
+
+def test_the_slab_type_variable_is_public() -> None:
+    """The return type of ``fix_bottom_atoms`` is part of its public signature.
+
+    ``fix_bottom_atoms(slab: SlabT, ...) -> SlabT`` is a "you get back what you
+    gave me" claim, so the variable has to be importable: a private ``_SlabT``
+    would force ``SKILL.md`` to document a name no caller can use, and a reader
+    cannot tell what the claim means.
+    """
+    import dsh4sci
+    from dsh4sci import constraints
+
+    assert "SlabT" in constraints.__all__
+    assert dsh4sci.SlabT is constraints.SlabT
+    assert isinstance(constraints.SlabT, TypeVar)
+    assert constraints.SlabT.__bound__ is Structure
+    assert not hasattr(constraints, "_SlabT"), (
+        "a private _SlabT is still declared; SKILL.md may only document public names"
+    )

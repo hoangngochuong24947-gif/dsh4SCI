@@ -8,8 +8,10 @@ needs, so that they are made **once**:
 - :func:`count_z_levels` -- how the atomic stack is grouped into layers; the
   Termination fingerprint (§C.5) and the "is this slab-like?" predicate (§E.5)
   both depend on it.
-- :data:`SLAB_ROLE` / :data:`ADSORBATE_ROLE` / :func:`split_roles` -- the shared
-  decision of which sites are Slab atoms and which are Adsorbate atoms (§G.4).
+- :data:`ROLE_PROPERTY` / :data:`SLAB_ROLE` / :data:`ADSORBATE_ROLE` /
+  :func:`split_roles` -- the shared decision of which sites are Slab atoms and
+  which are Adsorbate atoms (§G.4), including the name of the site property that
+  carries it.
 
 Vocabulary follows ``CONTEXT.md``: a **Slab** is a finite model of a surface and a
 **Vacuum** is the empty gap that makes its periodic repeat non-interacting.
@@ -40,6 +42,7 @@ from dsh4sci.errors import InvalidParameterError
 __all__ = [
     "ADSORBATE_ROLE",
     "DEFAULT_LAYER_TOL",
+    "ROLE_PROPERTY",
     "SLAB_ROLE",
     "count_z_levels",
     "group_z_levels",
@@ -48,10 +51,16 @@ __all__ = [
     "vacuum_gap",
 ]
 
-#: Site property marking a site as part of the Slab. See §G.4.
+#: Site property carrying the Slab/Adsorbate split. Its name is part of the public
+#: contract: callers set it themselves to feed :func:`split_roles`, and the modules
+#: that write or read it import this one constant rather than copying the string
+#: (§G.4).
+ROLE_PROPERTY: Final[str] = "role"
+
+#: The value a Slab site's :data:`ROLE_PROPERTY` holds. See §G.4.
 SLAB_ROLE: Final[str] = "slab"
 
-#: Site property marking a site as part of the Adsorbate. See §G.4.
+#: The value an Adsorbate site's :data:`ROLE_PROPERTY` holds. See §G.4.
 ADSORBATE_ROLE: Final[str] = "adsorbate"
 
 #: Default z-gap (A) that separates two distinct atomic layers. §C.5.
@@ -62,10 +71,6 @@ _SET_VACUUM_EXAMPLE = "set_vacuum(raw.get_orthogonal_c_slab(), 15.0)"
 # Tolerance for comparing a requested Vacuum against the slab's internal
 # interlayer gap: the two are floats derived by different arithmetic paths.
 _VACUUM_SLACK: Final[float] = 1e-9
-
-# The site property carrying the Slab/Adsorbate split. Its name is part of the
-# public contract: callers set it themselves to feed split_roles (§G.4).
-_ROLE_PROPERTY: Final[str] = "role"
 
 
 def vacuum_gap(structure: Structure) -> float:
@@ -310,8 +315,9 @@ def split_roles(structure: Structure) -> tuple[list[int], list[int]]:
     Species membership cannot make this call -- an OH adsorbate on a TiO2 slab
     shares O with the slab -- and neither can a z threshold, because the failure
     this exists to detect is an Adsorbate atom *below* the slab top (CONVENTIONS.md
-    §G.4). A ``role`` site property with exactly the values :data:`SLAB_ROLE` and
-    :data:`ADSORBATE_ROLE` can, and it survives ``copy()`` and ``make_supercell()``.
+    §G.4). A :data:`ROLE_PROPERTY` site property holding exactly :data:`SLAB_ROLE`
+    or :data:`ADSORBATE_ROLE` can, and it survives ``copy()`` and
+    ``make_supercell()``.
 
     The tag is a convenience for in-memory work, **not** a source of truth: it is
     lost on POSCAR/CIF round-trips, so anything that must survive file I/O carries
@@ -325,13 +331,13 @@ def split_roles(structure: Structure) -> tuple[list[int], list[int]]:
         may be empty if the tag says so.
 
     Raises:
-        ValueError: The structure has no ``role`` site property, or it holds a
-            value other than :data:`SLAB_ROLE` / :data:`ADSORBATE_ROLE`.
+        ValueError: The structure has no :data:`ROLE_PROPERTY` site property, or
+            it holds a value other than :data:`SLAB_ROLE` / :data:`ADSORBATE_ROLE`.
 
     Example:
         ``slab_idx, ads_idx = split_roles(combined)``
     """
-    roles = structure.site_properties.get(_ROLE_PROPERTY)
+    roles = structure.site_properties.get(ROLE_PROPERTY)
     if roles is None:
         raise ValueError(
             "structure has no 'role' site property; cannot separate Slab from "

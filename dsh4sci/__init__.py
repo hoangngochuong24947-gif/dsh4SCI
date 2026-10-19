@@ -18,6 +18,7 @@ from dsh4sci.loading import SUPPORTED_SUFFIXES, load_structure
 # Adsorbate role contract), consumed by tickets #4-#7
 from dsh4sci.geometry import (
     ADSORBATE_ROLE,
+    ROLE_PROPERTY,
     SLAB_ROLE,
     count_z_levels,
     group_z_levels,
@@ -34,7 +35,7 @@ from dsh4sci.slabs import (
 )
 
 # ticket #4 -- selective dynamics: mark the bottom of a Slab as fixed
-from dsh4sci.constraints import fix_bottom_atoms
+from dsh4sci.constraints import SlabT, fix_bottom_atoms
 
 # ticket #5 -- adsorption site enumeration: the site vocabulary, the typed site
 # record ticket #6 places an Adsorbate on, and the calibrated "is this a Slab?"
@@ -73,3 +74,46 @@ from dsh4sci.validation import (
     check_min_distance,
     check_structure,
 )
+
+# The declared public surface: exactly the names above, and nothing else. Without
+# this the re-exports are imported-but-unused as far as a linter is concerned, and
+# `from __future__ import annotations` leaks its own `annotations` binding into
+# `from dsh4sci import *`. Adding a public symbol means adding it here too.
+# Sorted, one name per line, no duplicates.
+__all__ = [
+    "ADSORBATE_ROLE",
+    "ANGLE_MAX",
+    "ANGLE_MIN",
+    "AdsorptionSite",
+    "CheckResult",
+    "DEFAULT_BINDING_HEIGHT",
+    "MIN_CELL_VOLUME",
+    "MIN_INTERATOMIC_DISTANCE",
+    "MIN_VACUUM",
+    "MIN_Z_LEVELS",
+    "PlacedAdsorbate",
+    "ROLE_PROPERTY",
+    "SITE_TYPES",
+    "SLAB_ROLE",
+    "SUPPORTED_SUFFIXES",
+    "SiteType",
+    "SlabT",
+    "TerminationFingerprint",
+    "all_passed",
+    "check_adsorbate_anchor_above_surface",
+    "check_lattice_angles",
+    "check_min_distance",
+    "check_structure",
+    "count_z_levels",
+    "find_adsorption_sites",
+    "fix_bottom_atoms",
+    "generate_slabs",
+    "group_z_levels",
+    "is_slab_like",
+    "load_structure",
+    "place_adsorbate",
+    "set_vacuum",
+    "split_roles",
+    "termination_fingerprint",
+    "vacuum_gap",
+]

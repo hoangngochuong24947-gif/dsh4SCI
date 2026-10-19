@@ -334,6 +334,40 @@ def test_a_slab_loaded_as_a_plain_structure_is_enumerated_too(pt_slab: Slab) -> 
         assert site.position[2] == pytest.approx(PT111_TOP_LAYER, abs=1e-6)
 
 
+# --- the Slab a plain Structure is presented as (a type contract) ----------
+
+
+def test_the_placeholder_slab_satisfies_the_slab_type_contract(pt_slab: Slab) -> None:
+    """The fabricated ``Slab`` metadata must be of the type ``Slab`` contracts.
+
+    ``get_orthogonal_c_slab`` lives on ``Slab``, so a Slab read back from a file --
+    a plain ``Structure`` -- is presented as one first. The metadata it cannot
+    supply is filled with neutral placeholders, and ``scale_factor`` is contracted
+    as the 3x3 matrix taking the oriented unit cell to the surface cell. A scalar
+    ``1.0`` is a float where every reader of that field expects a matrix (``mypy``
+    rejects it against ``Slab.__init__``), so the neutral placeholder is the
+    identity matrix. No public function returns the field, which is why this check
+    has to reach for the helper.
+    """
+    from dsh4sci.adsorption import _as_slab
+
+    plain = Structure.from_sites(list(pt_slab))
+    assert not isinstance(plain, Slab)
+
+    placeholder = _as_slab(plain)
+
+    assert isinstance(placeholder, Slab)
+    assert np.asarray(placeholder.scale_factor).shape == (3, 3)
+    assert np.array_equal(np.asarray(placeholder.scale_factor), np.eye(3))
+
+
+def test_a_real_slab_keeps_its_own_metadata(pt_slab: Slab) -> None:
+    """Only a plain Structure is wrapped; a Slab is returned as it is, unmodified."""
+    from dsh4sci.adsorption import _as_slab
+
+    assert _as_slab(pt_slab) is pt_slab
+
+
 # --- rejecting input that is not a Slab (§E.5 / §H) -----------------------
 
 

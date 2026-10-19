@@ -81,6 +81,7 @@ from dsh4sci.errors import InvalidParameterError, NotASlabError
 from dsh4sci.geometry import (
     ADSORBATE_ROLE,
     DEFAULT_LAYER_TOL,
+    ROLE_PROPERTY,
     SLAB_ROLE,
     count_z_levels,
     vacuum_gap,
@@ -121,11 +122,6 @@ _SURFACE_HEIGHT: Final[float] = 0.9
 
 # The direction an Adsorbate is oriented along: straight out of the surface.
 _UP: Final[np.ndarray] = np.array([0.0, 0.0, 1.0])
-
-# The site property carrying the Slab/Adsorbate split. Its name is a public
-# contract that lives in dsh4sci.geometry (which reads it in split_roles); it is
-# repeated here because geometry exposes the role *values* but not this key.
-_ROLE_PROPERTY: Final[str] = "role"
 
 # The site property selective dynamics is carried in (pymatgen's name for it).
 _SELECTIVE_DYNAMICS: Final[str] = "selective_dynamics"
@@ -335,7 +331,8 @@ def place_adsorbate(
     (measured: ``O_z - C_z = -1.1503`` for CO, §F.2).
 
     **Two things travel with the result, and they are not interchangeable.** The
-    ``role`` site property tags every site :data:`~dsh4sci.geometry.SLAB_ROLE` or
+    :data:`~dsh4sci.geometry.ROLE_PROPERTY` site property tags every site
+    :data:`~dsh4sci.geometry.SLAB_ROLE` or
     :data:`~dsh4sci.geometry.ADSORBATE_ROLE` and survives ``copy()`` and
     ``make_supercell()``; it is **lost through POSCAR/CIF**, so for anything that
     must survive file I/O use :attr:`PlacedAdsorbate.n_slab_atoms`, the count of
@@ -513,11 +510,11 @@ def _combined_properties(
 
     Two properties are written rather than inherited:
 
-    * ``role`` -- :data:`SLAB_ROLE` for every Slab site, :data:`ADSORBATE_ROLE` for
-      every Adsorbate site (§G.4). It is the only tag that can separate the two
-      when they share an element, and it survives ``copy()`` and
-      ``make_supercell()`` -- but not a POSCAR/CIF round-trip, which is why
-      :attr:`PlacedAdsorbate.n_slab_atoms` is returned as well.
+    * :data:`~dsh4sci.geometry.ROLE_PROPERTY` -- :data:`SLAB_ROLE` for every Slab
+      site, :data:`ADSORBATE_ROLE` for every Adsorbate site (§G.4). It is the only
+      tag that can separate the two when they share an element, and it survives
+      ``copy()`` and ``make_supercell()`` -- but not a POSCAR/CIF round-trip, which
+      is why :attr:`PlacedAdsorbate.n_slab_atoms` is returned as well.
     * ``selective dynamics``, when the Slab carries it -- an Adsorbate atom is free
       on all three axes. Filling it with ``None`` instead would make the POSCAR
       writer raise ``TypeError: 'NoneType' object is not iterable`` (measured), so
@@ -536,7 +533,7 @@ def _combined_properties(
         properties[_SELECTIVE_DYNAMICS] = (
             list(slab.site_properties[_SELECTIVE_DYNAMICS]) + [_FREE] * n_adsorbate
         )
-    properties[_ROLE_PROPERTY] = (
+    properties[ROLE_PROPERTY] = (
         [SLAB_ROLE] * len(slab) + [ADSORBATE_ROLE] * n_adsorbate
     )
     return properties
@@ -560,6 +557,12 @@ def _as_slab(structure: Structure) -> Slab:
     a plain ``Structure``. The orthogonalisation reads only the lattice and the
     sites, so the ``Slab``-only metadata (Miller index, shift, oriented unit cell)
     is filled with neutral placeholders and is not observable in the result.
+
+    ``scale_factor`` is contracted as a 3x3 matrix (the oriented unit cell -> the
+    surface cell), so its neutral placeholder is the identity matrix rather than
+    the scalar ``1.0``: a float there violates the ``Slab`` type contract, and any
+    later caller that reads the field would get a scalar where a matrix is
+    promised.
     """
     if isinstance(structure, Slab):
         return structure
@@ -570,6 +573,6 @@ def _as_slab(structure: Structure) -> Slab:
         miller_index=(0, 0, 1),
         oriented_unit_cell=structure,
         shift=0.0,
-        scale_factor=1.0,
+        scale_factor=np.eye(3),
         site_properties=structure.site_properties,
     )

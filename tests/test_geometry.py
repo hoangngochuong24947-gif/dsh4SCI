@@ -14,6 +14,8 @@ test can disagree with the implementation.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from pymatgen.core import Lattice, Structure
@@ -392,6 +394,76 @@ def test_role_constants_are_the_two_agreed_strings() -> None:
     """§G.4 pins the exact values; they are a cross-ticket contract."""
     assert SLAB_ROLE == "slab"
     assert ADSORBATE_ROLE == "adsorbate"
+
+
+def test_the_role_property_key_is_one_public_constant() -> None:
+    """The key of the ``role`` site property is part of the contract, so it is public.
+
+    Callers set the property themselves (§G.4), so they must be able to name the
+    key without copying the literal -- and the module that owns the role values is
+    the one that owns the key.
+    """
+    from dsh4sci import geometry
+
+    assert geometry.ROLE_PROPERTY == "role"
+    assert "ROLE_PROPERTY" in geometry.__all__
+
+
+def test_the_role_property_is_re_exported_from_the_package_root() -> None:
+    import dsh4sci
+    from dsh4sci import geometry
+
+    assert dsh4sci.ROLE_PROPERTY is geometry.ROLE_PROPERTY
+    assert "ROLE_PROPERTY" in dsh4sci.__all__
+
+
+def test_the_role_property_is_declared_exactly_once() -> None:
+    """One canonical key: geometry declares it, the other modules import it.
+
+    A second private copy is the defect this pins -- a rename in one module would
+    silently stop that module reading a tag another one wrote.
+    """
+    import dsh4sci
+    import dsh4sci.adsorption as adsorption
+    import dsh4sci.validation as validation
+    from dsh4sci import geometry
+
+    package = Path(dsh4sci.__file__).resolve().parent
+    offenders = sorted(
+        path.name
+        for path in package.glob("*.py")
+        if "_ROLE_PROPERTY" in path.read_text(encoding="utf-8")
+    )
+    assert offenders == [], (
+        f"{offenders} declare a private role-property key; import "
+        f"geometry.ROLE_PROPERTY instead"
+    )
+
+    for consumer in (geometry, adsorption, validation):
+        assert consumer.ROLE_PROPERTY == "role", (
+            f"{consumer.__name__} does not carry the one canonical role key"
+        )
+
+
+def test_split_roles_reads_the_property_tagged_through_the_public_name(
+    ortho_slab: Slab,
+) -> None:
+    """A caller tagging through ``ROLE_PROPERTY`` is read by ``split_roles``.
+
+    This is the write/read agreement the single constant exists to guarantee: the
+    key the caller is told to use is the key the reader looks up.
+    """
+    from dsh4sci.geometry import ROLE_PROPERTY
+
+    tagged = ortho_slab.copy()
+    n_slab = len(tagged)
+    tagged.append("C", [0.0, 0.0, 0.9], coords_are_cartesian=True)
+    tagged.add_site_property(
+        ROLE_PROPERTY, [SLAB_ROLE] * n_slab + [ADSORBATE_ROLE]
+    )
+
+    assert tagged.site_properties[ROLE_PROPERTY][-1] == ADSORBATE_ROLE
+    assert split_roles(tagged) == (list(range(n_slab)), [n_slab])
 
 
 def test_split_roles_partitions_a_tagged_structure(ortho_slab: Slab) -> None:

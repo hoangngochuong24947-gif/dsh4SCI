@@ -21,9 +21,12 @@ from pymatgen.core import Structure
 
 from dsh4sci.errors import InvalidParameterError
 
-__all__ = ["fix_bottom_atoms"]
+__all__ = ["SlabT", "fix_bottom_atoms"]
 
-_SlabT = TypeVar("_SlabT", bound=Structure)
+#: The structure type ``fix_bottom_atoms`` accepts and returns: a ``Slab`` in, a
+#: ``Slab`` out, a plain ``Structure`` in, a plain ``Structure`` out. Public
+#: because it appears in a public signature (and is documented as such).
+SlabT = TypeVar("SlabT", bound=Structure)
 
 # One valid call, used by every error message in this module so the snippet a
 # caller is told to paste is the documented invocation (§H.1 rule 5).
@@ -74,7 +77,7 @@ def _validate_fraction(fraction: float) -> float:
     return float(fraction)
 
 
-def fix_bottom_atoms(slab: _SlabT, fraction: float) -> _SlabT:
+def fix_bottom_atoms(slab: SlabT, fraction: float) -> SlabT:
     """Return a copy of ``slab`` with the bottom ``floor(n_atoms * fraction)`` atoms fixed.
 
     "Fixed" is expressed the only way pymatgen understands: a
