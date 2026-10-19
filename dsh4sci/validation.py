@@ -44,12 +44,16 @@ from typing import Final
 import numpy as np
 from pymatgen.core import Structure
 
+from dsh4sci.errors import InvalidParameterError
+from dsh4sci.geometry import ADSORBATE_ROLE, SLAB_ROLE, split_roles
+
 __all__ = [
     "ANGLE_MAX",
     "ANGLE_MIN",
     "MIN_CELL_VOLUME",
     "MIN_INTERATOMIC_DISTANCE",
     "CheckResult",
+    "check_adsorbate_anchor_above_surface",
     "check_lattice_angles",
     "check_min_distance",
 ]
@@ -70,6 +74,14 @@ ANGLE_MAX: Final[float] = 175.0
 
 #: Smallest valid cell volume, cubic angstrom. The skewed test cell measures ~4e-7.
 MIN_CELL_VOLUME: Final[float] = 1e-6
+
+# Numerical tolerance for "the anchor is exactly at the top layer": a boundary
+# comparison, not a physical allowance (0.1962 A below already fails, §G.2).
+_SURFACE_TOL: Final[float] = 1e-6
+
+_ANCHOR_EXAMPLE = (
+    "check_adsorbate_anchor_above_surface(placed.structure, placed.anchor_index)"
+)
 
 
 @dataclass(frozen=True)
@@ -215,4 +227,90 @@ def check_lattice_angles(
         )
     return CheckResult(
         name, True, f"angles={rounded}, volume={volume:.4f} A^3"
+    )
+
+
+def check_adsorbate_anchor_above_surface(
+    structure: Structure, anchor_index: int
+) -> CheckResult:
+    """Check that the Adsorbate's anchor atom sits at or above the Slab's top layer.
+
+    This is the motivating failure of the module: an Adsorbate placed *inside* the
+    Slab keeps every schema rule intact and is physically useless. It cannot be
+    detected from species (an OH Adsorbate shares O with a TiO2 Slab) or from a z
+    threshold (an atom below the Slab top is exactly what is being looked for), so
+    it is detected from the ``role`` site property through
+    :func:`dsh4sci.geometry.split_roles` -- the shared Slab/Adsorbate decision of
+    §G.4. The top layer is the maximum Cartesian z **of the Slab atoms only**, and
+    it is read from the structure, never assumed (§J.6).
+
+    The boundary is inclusive: an anchor exactly at the top layer passes, because
+    on the surface is not inside it. The tolerance is numerical (1e-6 A), not a
+    fudge band -- 0.1962 A under the top layer already fails (§G.2).
+
+    Args:
+        structure: A structure tagged with the ``role`` site property, i.e. the
+            ``structure`` of a :class:`~dsh4sci.adsorption.PlacedAdsorbate`.
+        anchor_index: Index of the Adsorbate's anchor atom -- the atom that binds
+            to the surface, e.g. ``placed.anchor_index``.
+
+    Returns:
+        A :class:`CheckResult` named ``"adsorbate_anchor_above_surface"``. Its
+        detail states the anchor's z, the Slab's top layer z and, on failure, the
+        depth below that layer -- the measured quantity, not just a flag.
+
+    Raises:
+        InvalidParameterError: ``anchor_index`` is not an integer, is outside the
+            structure, or (per the ``role`` tag) names a Slab atom.
+        ValueError: The structure has no ``role`` site property, propagated from
+            :func:`split_roles`, whose message says how to tag it.
+
+    Example:
+        ``check_adsorbate_anchor_above_surface(placed.structure, placed.anchor_index)``
+    """
+    name = "adsorbate_anchor_above_surface"
+    n_sites = len(structure)
+    if isinstance(anchor_index, bool) or not isinstance(anchor_index, int):
+        raise InvalidParameterError(
+            f"anchor_index={anchor_index!r} is invalid: expected an int. "
+            f"Valid: an index from 0 to {n_sites - 1}, e.g. "
+            f"PlacedAdsorbate.anchor_index. Example: {_ANCHOR_EXAMPLE}"
+        )
+    if not 0 <= anchor_index < n_sites:
+        raise InvalidParameterError(
+            f"anchor_index={anchor_index} is invalid: a structure of {n_sites} "
+            f"sites has no such site. Valid: 0 to {n_sites - 1}, e.g. "
+            f"PlacedAdsorbate.anchor_index. Example: {_ANCHOR_EXAMPLE}"
+        )
+
+    slab_indices, adsorbate_indices = split_roles(structure)
+    if anchor_index not in adsorbate_indices:
+        raise InvalidParameterError(
+            f"anchor_index={anchor_index} is invalid: site {anchor_index} is tagged "
+            f"{SLAB_ROLE!r}, not {ADSORBATE_ROLE!r}. Valid: a site tagged "
+            f"{ADSORBATE_ROLE!r}. Example: {_ANCHOR_EXAMPLE}"
+        )
+    if not slab_indices:
+        raise InvalidParameterError(
+            f"structure is invalid: no site is tagged {SLAB_ROLE!r}, so there is no "
+            f"top layer. Valid: a PlacedAdsorbate structure. "
+            f"Example: {_ANCHOR_EXAMPLE}"
+        )
+
+    cart = np.array(structure.cart_coords, dtype=float)
+    z_top = float(np.max(cart[slab_indices, 2]))
+    z_anchor = float(cart[anchor_index, 2])
+    symbol = structure[anchor_index].specie.symbol
+
+    if z_anchor < z_top - _SURFACE_TOL:
+        return CheckResult(
+            name,
+            False,
+            f"anchor site {anchor_index} ({symbol}) at z={z_anchor:.4f} A is "
+            f"{z_top - z_anchor:.4f} A BELOW the slab top layer z={z_top:.4f} A",
+        )
+    return CheckResult(
+        name,
+        True,
+        f"anchor at z={z_anchor:.4f} A >= slab top z={z_top:.4f} A",
     )

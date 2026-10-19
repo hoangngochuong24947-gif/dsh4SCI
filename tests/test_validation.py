@@ -32,8 +32,10 @@ from pymatgen.core.surface import Slab, SlabGenerator
 from dsh4sci.adsorption import find_adsorption_sites, place_adsorbate
 from dsh4sci.geometry import ADSORBATE_ROLE, SLAB_ROLE, split_roles
 from dsh4sci.slabs import generate_slabs
+from dsh4sci.errors import InvalidParameterError
 from dsh4sci.validation import (
     CheckResult,
+    check_adsorbate_anchor_above_surface,
     check_lattice_angles,
     check_min_distance,
 )
@@ -43,7 +45,8 @@ from dsh4sci.validation import (
 A_PT = 3.9231  # conventional cubic Pt lattice parameter, A (§J.4)
 
 CO_CLOSEST_PAIR = 1.15034  # intramolecular C-O bond in ase CO, A (§G.5)
-BURIED_ANCHOR_DEPTH = 5.7330  # CO pushed into the Pt(111) Slab, A (§G.2)
+BURIED_ANCHOR_Z = 10.8270  # anchor z after CO is pushed into Pt(111), A (§G.2)
+BURIED_ANCHOR_DEPTH = 5.7330  # ... which is this far below the top layer, A
 
 THRESHOLD = 0.5  # "closer than 0.5 A fails", A (§G.1)
 
@@ -314,3 +317,204 @@ def test_the_check_silences_pymatgen_warnings_for_a_degenerate_cell() -> None:
         warnings.simplefilter("error")
         assert check_lattice_angles(skewed).passed is False
         assert check_lattice_angles(degenerate).passed is False
+
+
+# --- Adsorbate anchor above the Slab surface (§G.2) -------------------------
+#
+# The motivating failure: an Adsorbate buried *inside* the Slab satisfies every
+# schema rule and is useless. Detecting it needs the shared Slab/Adsorbate split
+# (§G.4) -- a species test cannot separate O-adsorbate from O-slab, and a z test
+# would classify the buried atom as part of the Slab.
+
+
+def flat_cell(anchor_frac_z: float) -> Structure:
+    """A one-atom Slab whose top layer is exactly ``c / 2`` = 1.96155 A.
+
+    The Adsorbate atom is offset in x so the two sites never coincide, which keeps
+    the distance check valid and lets a test use this cell for either check.
+    ``3.9231 / 2`` renders as ``1.9615`` at 4 decimals -- the float is just under
+    the decimal value (§G.2 writes 1.96155).
+    """
+    structure = Structure(
+        Lattice.cubic(A_PT), ["Pt", "C"], [[0, 0, 0.5], [0.3, 0, anchor_frac_z]]
+    )
+    structure.add_site_property("role", [SLAB_ROLE, ADSORBATE_ROLE])
+    return structure
+
+
+def bury_adsorbate(structure: Structure, anchor_index: int, target_z: float) -> None:
+    """Translate every Adsorbate-tagged site down so the anchor lands at ``target_z``.
+
+    The Slab is untouched: this is the plumbing of an Adsorbate placed on the wrong
+    part of the surface, not a broken cell.
+    """
+    _, adsorbate_indices = split_roles(structure)
+    shift = target_z - cartesian_z(structure, anchor_index)
+    structure.translate_sites(adsorbate_indices, [0, 0, shift], frac_coords=False)
+
+
+def test_an_anchor_exactly_at_the_slab_top_layer_passes() -> None:
+    """The boundary is inclusive: on the surface is on the surface, not inside it.
+
+    ``structure[1]`` sits at the same z as the top layer (fractional z 0.50 in a
+    cell whose top layer is c/2), which is the boundary an Adsorbate bound on an
+    ``ontop`` site with ``distance = 0`` occupies.
+    """
+    structure = flat_cell(0.50)
+
+    result = check_adsorbate_anchor_above_surface(structure, anchor_index=1)
+
+    assert result.name == "adsorbate_anchor_above_surface"
+    assert result.passed is True
+    assert "anchor at z=1.9615 A" in result.detail
+    assert "slab top z=1.9615 A" in result.detail
+
+
+@pytest.mark.parametrize(
+    ("anchor_frac_z", "depth"),
+    [
+        pytest.param(0.45, 0.1962, id="just-below-0.1962A"),
+        pytest.param(0.25, 0.9808, id="buried-0.9808A"),
+    ],
+)
+def test_an_anchor_below_the_slab_top_layer_fails_and_states_the_depth(
+    anchor_frac_z: float, depth: float
+) -> None:
+    """Slightly below fails, and the detail says how far below.
+
+    §G.2 verified this boundary on a cell whose top layer is 1.96155 A: fractional
+    z 0.45 is 0.1962 A under it and fractional z 0.25 is 0.9808 A under it. Both
+    must fail -- the check is not a fudge band.
+    """
+    structure = flat_cell(anchor_frac_z)
+
+    result = check_adsorbate_anchor_above_surface(structure, anchor_index=1)
+
+    assert result.passed is False
+    assert f"{depth:.4f} A BELOW" in result.detail
+    assert "slab top layer z=1.9615 A" in result.detail
+    assert "anchor site 1 (C)" in result.detail
+
+
+def test_a_correct_co_on_pt111_has_its_anchor_above_the_surface(
+    pt_slab: Slab,
+) -> None:
+    """CO placed by ``place_adsorbate`` binds 1.85 A above the top layer: pass.
+
+    The anchor is the carbon, at z = 16.560011 + 1.85 = 18.410011 A, above the
+    slab top layer read from the structure rather than hard-coded (§J.6).
+    """
+    ontop = next(
+        site for site in find_adsorption_sites(pt_slab) if site.site_type == "ontop"
+    )
+    placed = place_adsorbate(pt_slab, ontop, molecule="CO", anchor="C")
+
+    result = check_adsorbate_anchor_above_surface(
+        placed.structure, anchor_index=placed.anchor_index
+    )
+
+    assert result.passed is True
+    assert f"anchor at z={cartesian_z(placed.structure, placed.anchor_index):.4f}" in (
+        result.detail
+    )
+    assert f"slab top z={slab_top_layer_z(placed.structure):.4f}" in result.detail
+
+
+def test_co_pushed_inside_the_pt111_slab_is_caught_and_the_depth_is_reported(
+    pt_slab: Slab,
+) -> None:
+    """The motivating failure: a buried Adsorbate in an otherwise valid structure.
+
+    The Slab is untouched and its cell is fine, so ``minimum_interatomic_distance``
+    and ``lattice_angles`` both still pass -- only the anchor check can see this.
+    Measured (§G.2): the anchor ends up 5.7330 A below the top layer, still *inside*
+    the stack (above the bottom layer), which is exactly why a z threshold could
+    never classify it as an Adsorbate.
+    """
+    ontop = next(
+        site for site in find_adsorption_sites(pt_slab) if site.site_type == "ontop"
+    )
+    placed = place_adsorbate(pt_slab, ontop, molecule="CO", anchor="C")
+    structure = placed.structure.copy()
+    bury_adsorbate(structure, placed.anchor_index, BURIED_ANCHOR_Z)
+
+    result = check_adsorbate_anchor_above_surface(
+        structure, anchor_index=placed.anchor_index
+    )
+
+    top = slab_top_layer_z(structure)
+    slab_indices, _ = split_roles(structure)
+    bottom = float(np.min(np.asarray(structure.cart_coords)[slab_indices, 2]))
+    anchor_z = cartesian_z(structure, placed.anchor_index)
+
+    assert result.passed is False
+    assert result.name == "adsorbate_anchor_above_surface"
+    # Buried *inside* the Slab, not merely below the whole cell.
+    assert bottom < anchor_z < top
+    assert anchor_z == pytest.approx(BURIED_ANCHOR_Z, abs=1e-9)
+    assert f"{top - anchor_z:.4f} A BELOW" in result.detail
+    assert f"{top - anchor_z:.4f}" == "5.7330"
+    # The rest of the self-check cannot see this structure as broken.
+    assert check_min_distance(structure).passed is True
+    assert check_lattice_angles(structure).passed is True
+
+
+def test_an_anchor_index_on_a_slab_atom_is_rejected() -> None:
+    """An anchor that the ``role`` tag calls Slab is a caller error, not a verdict.
+
+    Silently reporting "the anchor is below the top layer" for a Slab atom would
+    make a wrong index look like a physics failure.
+    """
+    structure = flat_cell(0.50)
+
+    with pytest.raises(InvalidParameterError) as excinfo:
+        check_adsorbate_anchor_above_surface(structure, anchor_index=0)
+
+    message = str(excinfo.value)
+    assert "anchor_index=0" in message
+    assert len(message) <= 210
+
+
+def test_a_non_integer_anchor_index_is_rejected() -> None:
+    """A float index is a caller error, not silently truncated to site 1."""
+    structure = flat_cell(0.50)
+
+    with pytest.raises(InvalidParameterError) as excinfo:
+        check_adsorbate_anchor_above_surface(structure, anchor_index=1.0)
+
+    message = str(excinfo.value)
+    assert "anchor_index=1.0" in message
+    assert len(message) <= 210
+
+
+def test_a_structure_with_no_slab_sites_is_rejected() -> None:
+    """Without a Slab there is no top layer, so the check cannot answer.
+
+    Reporting a pass would be a false negative on a structure whose ``role`` tags
+    are simply wrong.
+    """
+    structure = flat_cell(0.50)
+    structure.add_site_property("role", [ADSORBATE_ROLE, ADSORBATE_ROLE])
+
+    with pytest.raises(InvalidParameterError) as excinfo:
+        check_adsorbate_anchor_above_surface(structure, anchor_index=1)
+
+    message = str(excinfo.value)
+    assert "no site is tagged 'slab'" in message
+    assert len(message) <= 210
+
+
+def test_an_anchor_index_outside_the_structure_is_rejected() -> None:
+    """Index 7 in a 2-site structure must be an ``InvalidParameterError``.
+
+    Without it the caller gets an ``IndexError`` from the coordinate array, or
+    worse, a verdict about the *last* site if Python's negative indexing is used.
+    """
+    structure = flat_cell(0.50)
+
+    for bad_index in (2, 7, -1):
+        with pytest.raises(InvalidParameterError) as excinfo:
+            check_adsorbate_anchor_above_surface(structure, anchor_index=bad_index)
+        message = str(excinfo.value)
+        assert f"anchor_index={bad_index}" in message
+        assert len(message) <= 210
