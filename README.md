@@ -17,10 +17,10 @@ library supplies the rules on top (see
 ## Install
 
 ```bash
-pip install -e ".[dev]"
+pip install -e .
 ```
 
-Requires Python 3.12+. Dependencies are pinned exactly — `pymatgen`,
+Requires Python 3.12+. Add `.[dev]` for the test runner. Dependencies are pinned exactly — `pymatgen`,
 `pymatgen-core`, `ase`, `spglib`, and a `numpy` range — because the rules are
 pinned by tests that encode measured numbers, not by comments.
 
