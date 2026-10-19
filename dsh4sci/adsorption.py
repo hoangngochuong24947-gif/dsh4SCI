@@ -52,29 +52,55 @@ and would accept a zero-volume cell (§D9). Caveat: a bulk crystal whose periodi
 repeat exceeds 5 A along c *and* holds two distinct z-levels would be accepted --
 a false accept, which is the safe direction for an error; the caller is told the
 Vacuum it measured, so the mistake is visible.
+
+**Placing an Adsorbate on one of those sites** is the other half of the module.
+:func:`place_adsorbate` binds a molecule through a named element, by *symbol* --
+never by index, because ``ase.build.molecule`` orders atoms as it likes
+(``["O", "C"]`` for CO, so index 0 is oxygen) -- orients it along +z by rotating
+the anchor-relative frame before translating it, and puts the anchor at the site's
+own x, y and ``height`` above the Slab's top layer. The result is a
+:class:`PlacedAdsorbate`: the combined structure tagged with the ``role`` site
+property, the Slab's atom count, and the anchor's index. Both of the last two exist
+because the tag alone is not durable -- it survives ``copy()`` and
+``make_supercell()`` but is lost through POSCAR/CIF (§G.4).
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
+import numpy as np
+from ase.build import molecule as ase_molecule
 from pymatgen.analysis.adsorption import AdsorbateSiteFinder
-from pymatgen.core import Structure
+from pymatgen.core import Element, Structure
 from pymatgen.core.surface import Slab
 
-from dsh4sci.errors import NotASlabError
-from dsh4sci.geometry import DEFAULT_LAYER_TOL, count_z_levels, vacuum_gap
+from dsh4sci.errors import InvalidParameterError, NotASlabError
+from dsh4sci.geometry import (
+    ADSORBATE_ROLE,
+    DEFAULT_LAYER_TOL,
+    SLAB_ROLE,
+    count_z_levels,
+    vacuum_gap,
+)
 
 __all__ = [
+    "DEFAULT_BINDING_HEIGHT",
     "MIN_VACUUM",
     "MIN_Z_LEVELS",
     "SITE_TYPES",
     "AdsorptionSite",
+    "PlacedAdsorbate",
     "SiteType",
     "find_adsorption_sites",
     "is_slab_like",
+    "place_adsorbate",
 ]
+
+#: Default anchor-to-surface distance (A) when placing an Adsorbate (§F.3).
+DEFAULT_BINDING_HEIGHT: Final[float] = 1.85
 
 #: The closed set of Adsorption site types, in output order (§E.4).
 SiteType = Literal["ontop", "bridge", "hollow"]
@@ -93,8 +119,26 @@ MIN_Z_LEVELS: Final[int] = 2
 # (§E.2). Passed explicitly: it must not move with an upstream default.
 _SURFACE_HEIGHT: Final[float] = 0.9
 
+# The direction an Adsorbate is oriented along: straight out of the surface.
+_UP: Final[np.ndarray] = np.array([0.0, 0.0, 1.0])
+
+# The site property carrying the Slab/Adsorbate split. Its name is a public
+# contract that lives in dsh4sci.geometry (which reads it in split_roles); it is
+# repeated here because geometry exposes the role *values* but not this key.
+_ROLE_PROPERTY: Final[str] = "role"
+
+# The site property selective dynamics is carried in (pymatgen's name for it).
+_SELECTIVE_DYNAMICS: Final[str] = "selective_dynamics"
+
+# An Adsorbate atom is free to move on all three axes: it is never part of the
+# Slab's fixed bottom layer.
+_FREE: Final[tuple[bool, bool, bool]] = (True, True, True)
+
 # One valid call, reused by every message in this module (§H.1 rule 5).
 _FIND_EXAMPLE: Final[str] = "find_adsorption_sites(generate_slabs(bulk, (1, 1, 1))[0])"
+_PLACE_EXAMPLE: Final[str] = (
+    "place_adsorbate(slab, site, molecule='CO', anchor='C', height=1.85)"
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -122,6 +166,31 @@ class AdsorptionSite:
     def __str__(self) -> str:
         x, y, z = self.position
         return f"{self.site_type}@({x:.6f}, {y:.6f}, {z:.6f})"
+
+
+@dataclass(frozen=True)
+class PlacedAdsorbate:
+    """A Slab with an Adsorbate on it: the Structure plus what its tag cannot say.
+
+    The ``role`` site property on :attr:`structure` is the convenient way to tell
+    the Slab from the Adsorbate in memory, and it is not durable: it is dropped by
+    a POSCAR or CIF round-trip (§G.4). After file I/O, :attr:`n_slab_atoms` is the
+    source of truth -- the first ``n_slab_atoms`` sites are the Slab and the rest
+    are the Adsorbate.
+
+    Attributes:
+        structure: The combined structure -- every Slab site first, then one site
+            per Adsorbate atom in :func:`ase.build.molecule` order, tagged with the
+            ``role`` site property.
+        n_slab_atoms: How many leading sites belong to the Slab. Returned
+            separately, rather than read back off the tag, so it survives file I/O.
+        anchor_index: Index of the anchor atom in ``structure`` -- the atom that
+            binds, for a check that compares its height with the Slab's top layer.
+    """
+
+    structure: Structure
+    n_slab_atoms: int
+    anchor_index: int
 
 
 def is_slab_like(
@@ -234,6 +303,243 @@ def find_adsorption_sites(structure: Structure) -> list[AdsorptionSite]:
                 )
             )
     return sites
+
+
+def place_adsorbate(
+    slab: Structure,
+    site: AdsorptionSite,
+    *,
+    molecule: str,
+    anchor: str,
+    height: float = DEFAULT_BINDING_HEIGHT,
+) -> PlacedAdsorbate:
+    """Put an Adsorbate on one Adsorption site, anchored by element symbol.
+
+    The Adsorbate binds through ``anchor``, which sits at the site's own in-plane
+    position: its x and y are ``site.position[:2]`` -- the *site's*, not the top
+    atom's, which coincide only for an ``ontop`` site on a real top-layer atom --
+    and its z is the Slab's top layer plus ``height``. Because
+    :func:`find_adsorption_sites` fixes ``distance=0.0``, a site *is* the top-layer
+    plane, so ``height`` is the anchor-to-surface distance: 1.85 A by default, and
+    the anchor's nearest-neighbour distance on an ``ontop`` site is exactly it.
+
+    **The anchor is found by element symbol, never by index.** ``ase.build.
+    molecule`` orders atoms as it likes -- ``['O', 'C']`` for CO, ``['N', 'O']`` for
+    NO (§F.1) -- so anchoring ``atoms[0]`` binds oxygen instead of carbon and
+    leaves the molecule standing on its head.
+
+    **The molecule is oriented before it is translated.** The anchor-relative frame
+    is rotated so the anchor -> (mean of the other atoms) direction points along
+    +z, i.e. out of the surface. Doing it the other way round -- anchoring first
+    and flipping a z component afterwards -- silently inverts the molecule
+    (measured: ``O_z - C_z = -1.1503`` for CO, §F.2).
+
+    **Two things travel with the result, and they are not interchangeable.** The
+    ``role`` site property tags every site :data:`~dsh4sci.geometry.SLAB_ROLE` or
+    :data:`~dsh4sci.geometry.ADSORBATE_ROLE` and survives ``copy()`` and
+    ``make_supercell()``; it is **lost through POSCAR/CIF**, so for anything that
+    must survive file I/O use :attr:`PlacedAdsorbate.n_slab_atoms`, the count of
+    leading Slab atoms, which is why it is returned separately (§G.4). The
+    ``selective_dynamics`` property of a Slab prepared by
+    :func:`dsh4sci.constraints.fix_bottom_atoms` is carried over, with every
+    Adsorbate atom free.
+
+    Every site already in ``slab`` is tagged as Slab, so placement takes a Slab, not
+    a structure that already carries an Adsorbate: place one Adsorbate per call.
+
+    Args:
+        slab: The Slab to adsorb onto -- a Slab-like ``Structure``, as returned by
+            :func:`dsh4sci.slabs.generate_slabs`. It is not modified.
+        site: The Adsorption site to bind on, from
+            :func:`find_adsorption_sites` (or a :class:`AdsorptionSite` built by
+            hand for a position of your own).
+        molecule: An ASE ``g2`` molecule name, e.g. ``"CO"``, ``"OH"``, ``"H2O"``.
+        anchor: Element symbol of the atom that binds to the surface, e.g. ``"C"``
+            for CO and ``"O"`` for OH. Must be one of the molecule's elements.
+        height: Anchor-to-surface distance in angstrom. Must be a finite, positive
+            length; 1.85 A is the default.
+
+    Returns:
+        The combined :class:`PlacedAdsorbate`: the structure, its Slab atom count
+        and the anchor's index. The Adsorbate's sites follow the Slab's in ASE
+        molecule order, and their Cartesian coordinates are the ones that put the
+        anchor on the site -- so they are reported in the frame of the Slab with c
+        already perpendicular to its in-plane vectors (see the module docstring),
+        and they may lie outside the unit cell along z.
+
+    Raises:
+        TypeError: ``slab`` is not a pymatgen ``Structure``, or ``site`` is not an
+            :class:`AdsorptionSite`.
+        InvalidParameterError: ``molecule`` is not an ASE ``g2`` name, ``anchor`` is
+            not one of its elements, or ``height`` is not a finite positive length.
+            Each message names the parameter, the rejected value, the valid set and
+            a valid call (§H).
+
+    Example:
+        ``sites = find_adsorption_sites(slab);``
+        ``placed = place_adsorbate(slab, sites[0], molecule="CO", anchor="C")``
+    """
+    if not isinstance(slab, Structure):
+        raise TypeError(
+            f"slab={type(slab).__name__!r} is invalid: expected a pymatgen "
+            f"Structure. Valid: a Slab-like Structure, e.g. from "
+            f"generate_slabs(). Example: {_PLACE_EXAMPLE}"
+        )
+    if not isinstance(site, AdsorptionSite):
+        raise TypeError(
+            f"site={site!r} is invalid: expected an AdsorptionSite, got "
+            f"{type(site).__name__}. Valid: a find_adsorption_sites() record. "
+            f"Example: {_PLACE_EXAMPLE}"
+        )
+    if not (isinstance(height, (int, float)) and math.isfinite(height) and height > 0):
+        raise InvalidParameterError(
+            f"height={height!r} is invalid: must be a finite float > 0. Valid: an "
+            f"anchor-surface distance in Angstrom, e.g. 1.85. "
+            f"Example: {_PLACE_EXAMPLE}"
+        )
+
+    symbols, positions = _load_molecule(molecule)
+    anchor_index_local = _anchor_index(symbols, anchor, molecule)
+    relative = _pointing_away(
+        positions - positions[anchor_index_local], anchor_index_local
+    )
+
+    base = _orthogonalised(slab)
+    top_z = float(np.max(np.asarray(base.cart_coords)[:, 2]))
+    anchor_cart = np.array(
+        [site.position[0], site.position[1], top_z + height], dtype=float
+    )
+    cart = relative + anchor_cart
+    cart[anchor_index_local] = anchor_cart
+
+    fractional = base.lattice.get_fractional_coords(cart)
+    species = [base_site.species for base_site in base] + [
+        Element(symbol) for symbol in symbols
+    ]
+    structure = Structure(
+        base.lattice,
+        species,
+        np.vstack([np.asarray(base.frac_coords), fractional]),
+        site_properties=_combined_properties(base, len(symbols)),
+    )
+    return PlacedAdsorbate(
+        structure=structure,
+        n_slab_atoms=len(base),
+        anchor_index=len(base) + anchor_index_local,
+    )
+
+
+def _load_molecule(molecule: str) -> tuple[list[str], np.ndarray]:
+    """The molecule's element symbols and Cartesian positions, in ASE's own order.
+
+    ASE's ``molecule`` raises a bare ``KeyError`` for an unknown name (§H), which
+    tells an agent nothing about the valid set or what to call instead.
+    """
+    try:
+        atoms = ase_molecule(molecule)
+    except KeyError as exc:
+        raise InvalidParameterError(
+            f"molecule={molecule!r} is not a known ASE molecule. Valid: an ASE "
+            f"`g2` name such as 'CO', 'OH', 'H2O'. Example: {_PLACE_EXAMPLE}"
+        ) from exc
+    return (
+        list(atoms.get_chemical_symbols()),
+        np.asarray(atoms.get_positions(), dtype=float),
+    )
+
+
+def _anchor_index(symbols: list[str], anchor: str, molecule: str) -> int:
+    """Index of the atom that binds, found by symbol -- never by position in the list.
+
+    ``list.index`` raises ``'N' is not in list``, which names neither the parameter
+    nor the valid set (§H).
+    """
+    if anchor not in symbols:
+        elements = sorted(set(symbols))
+        raise InvalidParameterError(
+            f"anchor={anchor!r} is not present in Adsorbate {molecule!r} "
+            f"(elements: {elements}). Valid: one of {elements}. "
+            f"Example: {_PLACE_EXAMPLE}"
+        )
+    return symbols.index(anchor)
+
+
+def _pointing_away(relative: np.ndarray, anchor_index: int) -> np.ndarray:
+    """Rotate an anchor-centred molecule so it points along +z.
+
+    ``relative`` holds the molecule's atoms with the anchor at the origin. The
+    rotation is chosen to take the anchor -> (mean of the other atoms) direction
+    onto :data:`_UP`, which points the bulk of the molecule away from the surface
+    instead of through it. It is applied **before** the molecule is translated
+    onto the site: re-anchoring first and flipping a z component afterwards
+    silently inverts the molecule (measured ``O_z - C_z = -1.1503`` for CO, §F.2).
+
+    A one-atom molecule, or one whose other atoms are centred on the anchor, has no
+    direction to align and is returned unrotated; an exactly antiparallel target is
+    a 180 deg rotation about any axis perpendicular to it, for which ``-I`` is the
+    degenerate rotation matrix.
+    """
+    others = [index for index in range(len(relative)) if index != anchor_index]
+    if not others:
+        return relative
+    target = relative[others].mean(axis=0)
+    norm = float(np.linalg.norm(target))
+    if norm < 1e-9:
+        return relative
+    target = target / norm
+    if np.allclose(target, _UP):
+        return relative
+    cross = np.cross(target, _UP)
+    sine = float(np.linalg.norm(cross))
+    cosine = float(np.dot(target, _UP))
+    if sine < 1e-12:
+        rotation = np.eye(3) if cosine > 0 else -np.eye(3)
+    else:
+        skew = np.array(
+            [
+                [0.0, -cross[2], cross[1]],
+                [cross[2], 0.0, -cross[0]],
+                [-cross[1], cross[0], 0.0],
+            ]
+        )
+        rotation = np.eye(3) + skew + skew @ skew * ((1.0 - cosine) / sine**2)
+    return relative @ rotation.T
+
+
+def _combined_properties(
+    slab: Structure, n_adsorbate: int
+) -> dict[str, list[Any]]:
+    """Per-atom site properties for the combined structure, Slab first.
+
+    Two properties are written rather than inherited:
+
+    * ``role`` -- :data:`SLAB_ROLE` for every Slab site, :data:`ADSORBATE_ROLE` for
+      every Adsorbate site (§G.4). It is the only tag that can separate the two
+      when they share an element, and it survives ``copy()`` and
+      ``make_supercell()`` -- but not a POSCAR/CIF round-trip, which is why
+      :attr:`PlacedAdsorbate.n_slab_atoms` is returned as well.
+    * ``selective dynamics``, when the Slab carries it -- an Adsorbate atom is free
+      on all three axes. Filling it with ``None`` instead would make the POSCAR
+      writer raise ``TypeError: 'NoneType' object is not iterable`` (measured), so
+      the flags of a Slab prepared by :func:`dsh4sci.constraints.fix_bottom_atoms`
+      survive placement with the Adsorbate left free.
+
+    Any other property the Slab carries is kept for the Slab sites and holds no
+    value for the Adsorbate's, where pymatgen's own convention for an appended
+    site is ``None``.
+    """
+    properties: dict[str, list[Any]] = {
+        key: list(values) + [None] * n_adsorbate
+        for key, values in slab.site_properties.items()
+    }
+    if _SELECTIVE_DYNAMICS in slab.site_properties:
+        properties[_SELECTIVE_DYNAMICS] = (
+            list(slab.site_properties[_SELECTIVE_DYNAMICS]) + [_FREE] * n_adsorbate
+        )
+    properties[_ROLE_PROPERTY] = (
+        [SLAB_ROLE] * len(slab) + [ADSORBATE_ROLE] * n_adsorbate
+    )
+    return properties
 
 
 def _orthogonalised(structure: Structure) -> Slab:
