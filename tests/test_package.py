@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+import types
 from pathlib import Path
 
 import pytest
@@ -131,3 +132,145 @@ def test_missing_files_are_not_absorbed_into_the_library_root() -> None:
 
     with pytest.raises(FileNotFoundError):
         raise FileNotFoundError("missing")
+
+
+# --- the declared public surface -------------------------------------------
+# `__all__` is what makes the re-exports in `dsh4sci/__init__.py` a contract
+# instead of an accident of import order. It is written out here as a literal --
+# not derived from the module -- so adding, removing or renaming a public symbol
+# has to move this list.
+
+PUBLIC_SURFACE = frozenset(
+    {
+        # ticket #2 -- structure loading
+        "SUPPORTED_SUFFIXES",
+        "load_structure",
+        # ticket #3 -- the shared geometry primitives
+        "ADSORBATE_ROLE",
+        "SLAB_ROLE",
+        "count_z_levels",
+        "group_z_levels",
+        "set_vacuum",
+        "split_roles",
+        "vacuum_gap",
+        # ticket #3 -- slab generation and the Termination fingerprint
+        "TerminationFingerprint",
+        "generate_slabs",
+        "termination_fingerprint",
+        # ticket #4 -- selective dynamics
+        "fix_bottom_atoms",
+        # ticket #5 -- adsorption site enumeration
+        "MIN_VACUUM",
+        "MIN_Z_LEVELS",
+        "SITE_TYPES",
+        "AdsorptionSite",
+        "SiteType",
+        "find_adsorption_sites",
+        "is_slab_like",
+        # ticket #6 -- adsorbate placement
+        "DEFAULT_BINDING_HEIGHT",
+        "PlacedAdsorbate",
+        "place_adsorbate",
+        # ticket #7 -- the structure self-check
+        "ANGLE_MAX",
+        "ANGLE_MIN",
+        "MIN_CELL_VOLUME",
+        "MIN_INTERATOMIC_DISTANCE",
+        "CheckResult",
+        "all_passed",
+        "check_adsorbate_anchor_above_surface",
+        "check_lattice_angles",
+        "check_min_distance",
+        "check_structure",
+    }
+)
+
+
+def test_the_package_declares_its_public_surface() -> None:
+    import dsh4sci
+
+    assert isinstance(dsh4sci.__all__, list), (
+        f"dsh4sci.__all__ is {type(dsh4sci.__all__).__name__}; it must be a list so "
+        f"the surface is explicit"
+    )
+    assert all(isinstance(name, str) for name in dsh4sci.__all__)
+    assert len(dsh4sci.__all__) == len(set(dsh4sci.__all__)), (
+        "dsh4sci.__all__ declares a name twice"
+    )
+    assert set(dsh4sci.__all__) == PUBLIC_SURFACE, (
+        f"missing: {sorted(PUBLIC_SURFACE - set(dsh4sci.__all__))}; "
+        f"unexpected: {sorted(set(dsh4sci.__all__) - PUBLIC_SURFACE)}"
+    )
+
+
+def test_every_declared_name_exists_on_the_package() -> None:
+    import dsh4sci
+
+    missing = [name for name in dsh4sci.__all__ if not hasattr(dsh4sci, name)]
+
+    assert missing == [], f"{missing} are declared in __all__ but not importable"
+
+
+def test_star_import_yields_the_declared_surface_and_nothing_else() -> None:
+    """`from __future__ import annotations` binds a module-level `annotations` name.
+
+    Without `__all__` that name is part of the star-import surface, so a caller
+    would get a `_Feature` object as if it were library API. The declared surface
+    is the whole of what a star import may bring: nothing withheld, nothing leaked.
+    """
+    import dsh4sci
+
+    namespace: dict[str, object] = {}
+    exec("from dsh4sci import *", namespace)
+
+    exported = {name for name in namespace if not name.startswith("__")}
+    assert "annotations" not in namespace
+    assert exported == set(dsh4sci.__all__), (
+        f"star import leaked: {sorted(exported - set(dsh4sci.__all__))}"
+    )
+
+
+def test_the_declared_surface_holds_no_dunders_or_submodules() -> None:
+    import dsh4sci
+
+    for name in dsh4sci.__all__:
+        value = getattr(dsh4sci, name)
+        assert not name.startswith("_"), f"{name} is private"
+        assert not isinstance(value, types.ModuleType), (
+            f"{name} is a submodule, not part of the API"
+        )
+
+
+_DOCUMENTED_IMPORT = re.compile(
+    r"^from dsh4sci import (?P<rest>\([^)]*\)|[^\n#]+)", re.MULTILINE
+)
+
+
+def _documented_package_imports() -> set[str]:
+    """Every name ``SKILL.md`` imports from the package root.
+
+    SKILL.md says only names exported from the package root may be documented, so
+    its import lines are the documented promise this check holds `__all__` to.
+    """
+    text = (REPO_ROOT / "SKILL.md").read_text(encoding="utf-8")
+    names: set[str] = set()
+    for match in _DOCUMENTED_IMPORT.finditer(text):
+        rest = match.group("rest").strip()
+        if rest.startswith("("):
+            rest = rest[1 : rest.index(")")]
+        for chunk in rest.replace("\n", " ").split(","):
+            name = chunk.split(" as ")[0].strip()
+            if name:
+                names.add(name)
+    return names
+
+
+def test_every_documented_package_import_is_in_the_public_surface() -> None:
+    import dsh4sci
+
+    documented = _documented_package_imports()
+
+    assert documented, "SKILL.md imports nothing from the package root"
+    assert documented <= set(dsh4sci.__all__), (
+        f"documented but not exported: {sorted(documented - set(dsh4sci.__all__))}"
+    )
