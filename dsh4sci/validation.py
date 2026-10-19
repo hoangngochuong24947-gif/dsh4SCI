@@ -36,6 +36,8 @@ different one where a system justifies it (:data:`MIN_INTERATOMIC_DISTANCE`).
 
 from __future__ import annotations
 
+import math
+import warnings
 from dataclasses import dataclass
 from typing import Final
 
@@ -43,8 +45,12 @@ import numpy as np
 from pymatgen.core import Structure
 
 __all__ = [
+    "ANGLE_MAX",
+    "ANGLE_MIN",
+    "MIN_CELL_VOLUME",
     "MIN_INTERATOMIC_DISTANCE",
     "CheckResult",
+    "check_lattice_angles",
     "check_min_distance",
 ]
 
@@ -54,6 +60,16 @@ __all__ = [
 #: closest pair of 1.15034 A -- the intramolecular C-O bond -- so anything near
 #: that would reject a chemically sound structure.
 MIN_INTERATOMIC_DISTANCE: Final[float] = 0.5
+
+#: Smallest valid lattice angle, degrees. Below this the cell is collapsed (§G.3).
+ANGLE_MIN: Final[float] = 5.0
+
+#: Largest valid lattice angle, degrees. ``gamma = 177`` is *inside* this range and
+#: still leaves no volume -- which is why the lattice check also tests volume.
+ANGLE_MAX: Final[float] = 175.0
+
+#: Smallest valid cell volume, cubic angstrom. The skewed test cell measures ~4e-7.
+MIN_CELL_VOLUME: Final[float] = 1e-6
 
 
 @dataclass(frozen=True)
@@ -131,4 +147,72 @@ def check_min_distance(
         True,
         f"closest pair {first} ({symbol_first})-{second} ({symbol_second}) at "
         f"{distance:.4f} A (> {threshold} A)",
+    )
+
+
+def check_lattice_angles(
+    structure: Structure,
+    min_angle: float = ANGLE_MIN,
+    max_angle: float = ANGLE_MAX,
+    min_volume: float = MIN_CELL_VOLUME,
+) -> CheckResult:
+    """Check that the lattice holds a real cell: plausible angles *and* real volume.
+
+    Two conditions, and both are needed (§G.3):
+
+    1. every angle lies in ``[min_angle, max_angle]`` -- 5 to 175 degrees by
+       default. ``nan`` fails this, which is what catches a fully collapsed cell.
+    2. the volume is finite and greater than ``min_volume``. A badly skewed cell
+       keeps every angle inside the range and still has no volume, because
+       ``gamma = 177`` degrees narrows the cell towards a plane.
+
+    ``Structure.is_valid()`` is **not** used and must not be: it is a 0.5 A
+    distance check (``min(distance_matrix) > 0.5``), so it reports ``True`` for a
+    cell of zero volume -- measured on ``from_parameters(3, 3, 3, 89, 88, 177)``.
+    ``Lattice`` has no ``is_valid`` to fall back on either.
+
+    Angles of 60 and 120 degrees are ordinary hexagonal surface cells and pass;
+    the rule is a validity range, not a preference for orthogonality.
+
+    pymatgen divides by zero to measure a collapsed cell and emits a
+    ``RuntimeWarning``; it is suppressed here so the check is quiet on the input it
+    exists to reject.
+
+    Args:
+        structure: The structure whose lattice is checked.
+        min_angle: Smallest valid lattice angle in degrees.
+        max_angle: Largest valid lattice angle in degrees.
+        min_volume: Smallest valid cell volume in cubic angstrom.
+
+    Returns:
+        A :class:`CheckResult` named ``"lattice_angles"``. Its detail states the
+        measured angles (rounded to 3 decimals) and the volume to 4 decimals, so a
+        caller can see how far the cell is from valid.
+
+    Example:
+        ``check_lattice_angles(slab)`` reports ``volume=160.3449 A^3`` for Pt(111).
+    """
+    name = "lattice_angles"
+    # A degenerate cell makes pymatgen's own angle/volume properties divide by
+    # zero; the check must reject that input, not warn about it.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        angles = tuple(float(angle) for angle in structure.lattice.angles)
+        volume = float(structure.lattice.volume)
+
+    rounded = tuple(round(angle, 3) for angle in angles)
+    out_of_range = [
+        angle for angle in angles if not (min_angle <= angle <= max_angle)
+    ]
+    has_volume = math.isfinite(volume) and volume > min_volume
+
+    if out_of_range or not has_volume:
+        return CheckResult(
+            name,
+            False,
+            f"invalid cell: angles={rounded}, valid range "
+            f"[{min_angle}, {max_angle}] deg, volume={volume:.6g} A^3",
+        )
+    return CheckResult(
+        name, True, f"angles={rounded}, volume={volume:.4f} A^3"
     )

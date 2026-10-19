@@ -22,6 +22,7 @@ literal so these tests can disagree with the implementation:
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -31,7 +32,11 @@ from pymatgen.core.surface import Slab, SlabGenerator
 from dsh4sci.adsorption import find_adsorption_sites, place_adsorbate
 from dsh4sci.geometry import ADSORBATE_ROLE, SLAB_ROLE, split_roles
 from dsh4sci.slabs import generate_slabs
-from dsh4sci.validation import CheckResult, check_min_distance
+from dsh4sci.validation import (
+    CheckResult,
+    check_lattice_angles,
+    check_min_distance,
+)
 
 # --- pinned numbers, CONVENTIONS.md §G / §J --------------------------------
 
@@ -67,6 +72,18 @@ def slab_top_layer_z(structure: Structure) -> float:
 def naive_cartesian_span(structure: Structure, first: int, second: int) -> float:
     """Plain |z1 - z2| with no periodic folding -- what the check must *not* do."""
     return abs(cartesian_z(structure, first) - cartesian_z(structure, second))
+
+
+def cautionary_lattice(*parameters: float) -> Lattice:
+    """A lattice pymatgen warns about while measuring it.
+
+    Building a collapsed cell divides by zero inside pymatgen; that warning is not
+    the subject of these tests, so it is absorbed at construction. The check's own
+    suppression is proven separately, with warnings promoted to errors.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return Lattice.from_parameters(*parameters)
 
 
 # --- fixtures (ticket-local: conftest.py belongs to ticket #2) --------------
@@ -181,3 +198,119 @@ def test_a_structure_with_a_single_site_has_no_pair_and_passes() -> None:
 
     assert result.passed is True
     assert "only 1 site" in result.detail
+
+
+# --- lattice-angle validity (§G.3) -----------------------------------------
+#
+# ``Structure.is_valid()`` is deliberately *not* used: it is a 0.5 A distance check
+# that returns True for a zero-volume cell, and ``Lattice`` has no ``is_valid`` at
+# all. These tests pin the explicit rule and the evidence for it.
+
+
+@pytest.mark.parametrize(
+    ("lattice", "volume"),
+    [
+        pytest.param(Lattice.cubic(A_PT), CUBIC_VOLUME, id="cubic-90-90-90"),
+        pytest.param(
+            Lattice.from_parameters(3, 3, 5, 90, 90, 120),
+            HEX_VOLUME,
+            id="hexagonal-90-90-120",
+        ),
+        pytest.param(
+            Lattice.from_parameters(3, 3, 5, 90, 90, 60),
+            38.9711,
+            id="slab-like-90-90-60",
+        ),
+    ],
+)
+def test_a_real_cell_passes_the_lattice_angle_check(
+    lattice: Lattice, volume: float
+) -> None:
+    """A cubic cell passes -- and so do 120 and 60 degree cells.
+
+    Hexagonal (90, 90, 120) and the Pt(111) Slab's own (90, 90, 60) are normal
+    surface cells; tightening the rule to "near 90 degrees" would reject every
+    hexagonal surface in the library.
+    """
+    structure = Structure(lattice, ["Pt"], [[0, 0, 0]])
+
+    result = check_lattice_angles(structure)
+
+    assert result.name == "lattice_angles"
+    assert result.passed is True
+    assert f"volume={volume:.4f}" in result.detail
+    assert result.detail.startswith("angles=(")
+
+
+def test_the_canonical_pt111_slab_cell_passes(pt_slab: Slab) -> None:
+    """The real Slab's cell -- angles (90, 90, 60), 160.3449 A^3 -- must pass.
+
+    A structure the library itself generates must never fail its own self-check.
+    """
+    result = check_lattice_angles(pt_slab)
+
+    assert result.passed is True
+    assert "volume=160.3449" in result.detail
+    assert "60.0" in result.detail
+
+
+def test_a_badly_skewed_cell_fails_even_though_its_angles_look_plausible() -> None:
+    """gamma = 177 degrees narrows the cell to ~0 volume while staying under 175.
+
+    This cell is inside any sane angle range, so only the volume test catches it --
+    which is exactly why the rule has two conditions.
+    """
+    structure = Structure(cautionary_lattice(3, 3, 3, 89, 88, 177), ["Pt"], [[0, 0, 0]])
+
+    result = check_lattice_angles(structure)
+
+    assert result.passed is False
+    assert "invalid cell" in result.detail
+    assert "[5.0, 175.0]" in result.detail
+    assert float(structure.lattice.volume) <= MIN_CELL_VOLUME
+
+
+def test_structure_is_valid_is_the_wrong_tool_for_a_degenerate_cell() -> None:
+    """``is_valid()`` says True and ``Lattice`` has no ``is_valid`` at all.
+
+    This is the D9 evidence, pinned so nobody "simplifies" the check back to
+    ``structure.is_valid()``: a zero-volume cell would pass.
+    """
+    structure = Structure(cautionary_lattice(3, 3, 3, 89, 88, 177), ["Pt"], [[0, 0, 0]])
+
+    assert structure.is_valid() is True
+    assert structure.volume <= MIN_CELL_VOLUME
+    assert not hasattr(Lattice, "is_valid")
+    assert check_lattice_angles(structure).passed is False
+
+
+def test_a_collapsed_cell_with_non_finite_angles_fails() -> None:
+    """alpha = 0 degrees is not a lattice: the angles come back ``nan``.
+
+    ``nan`` fails every range comparison, so the angle condition alone must reject
+    it -- a bare ``min(angles) < 5`` would silently accept it.
+    """
+    structure = Structure(cautionary_lattice(3, 3, 3, 0, 90, 90), ["Pt"], [[0, 0, 0]])
+
+    assert any(math.isnan(angle) for angle in structure.lattice.angles)
+
+    result = check_lattice_angles(structure)
+
+    assert result.passed is False
+    assert "invalid cell" in result.detail
+    assert "nan" in result.detail
+
+
+def test_the_check_silences_pymatgen_warnings_for_a_degenerate_cell() -> None:
+    """pymatgen divides by zero to measure a collapsed cell; the check absorbs it.
+
+    Run with warnings promoted to errors, so an unsuppressed ``RuntimeWarning``
+    from inside the check fails this test instead of polluting the test output.
+    """
+    skewed = Structure(cautionary_lattice(3, 3, 3, 89, 88, 177), ["Pt"], [[0, 0, 0]])
+    degenerate = Structure(cautionary_lattice(3, 3, 3, 0, 90, 90), ["Pt"], [[0, 0, 0]])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert check_lattice_angles(skewed).passed is False
+        assert check_lattice_angles(degenerate).passed is False
