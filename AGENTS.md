@@ -1,13 +1,14 @@
 # dsh4SCI
 
-MatPilot plugin repository. Mirrors the domain logic of physics, chemistry, and
-materials science: structure construction, simulation hand-off, and screening.
+Materials-science domain logic as a Python library: the rules for building and
+judging atomistic structures — surfaces, slabs, and adsorbates. See
+`CONTEXT.md` for the vocabulary and `docs/adr/` for the founding decisions.
 
 ## Agent skills
 
 ### Issue tracker
 
-GitHub Issues on `hoangngochuong24947-gif/dsh4SCI` (private), driven by the `gh` CLI. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `hoangngochuong24947-gif/dsh4SCI`, driven by the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
