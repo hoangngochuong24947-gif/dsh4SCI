@@ -32,3 +32,6 @@ from dsh4sci.slabs import (
     generate_slabs,
     termination_fingerprint,
 )
+
+# ticket #4 -- selective dynamics: mark the bottom of a Slab as fixed
+from dsh4sci.constraints import fix_bottom_atoms
